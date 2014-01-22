@@ -1,0 +1,119 @@
+//Microsoft Developer Studio generated resource script.
+//
+///#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "afxres.h"
+#include "svctlres.h"
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// English (U.S.) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+#ifdef _WIN32
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
+#endif //_WIN32
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE DISCARDABLE 
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE DISCARDABLE 
+BEGIN
+    "#include ""afxres.h""\r\n"
+    "#include ""svctlres.h""\0"
+END
+
+3 TEXTINCLUDE DISCARDABLE 
+BEGIN
+    "\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+SVCTL_IDDMUI_PROGRESS DIALOG DISCARDABLE  0, 0, 186, 65
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_VISIBLE
+FONT 8, "MS Sans Serif"
+BEGIN
+    PUSHBUTTON      "Cancel",IDCANCEL,67,44,50,14,WS_DISABLED
+    LTEXT           "",SVCTL_IDCMUI_PROGRESS_TEXT,7,7,172,26
+    CONTROL         "",IDC_STATIC,"Static",SS_ETCHEDHORZ,7,37,172,1
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table
+//
+
+STRINGTABLE DISCARDABLE 
+BEGIN
+    SVCTL_IDSGUI_WNDCLASS   "SVCTL Hidden Window"
+    SVCTL_IDSGUI_DEFTITLE   "Service Application"
+END
+
+STRINGTABLE DISCARDABLE 
+BEGIN
+    SVCTL_IDSMGR_INSTALL_SUCCESS 
+                            "The following services were successfully installed:"
+    SVCTL_IDSMGR_REMOVE_SUCCESS 
+                            "The following services were successfully removed:"
+    SVCTL_IDSMGR_REMOVE_PROMPT 
+                            "Do you want to remove the service(s) that have already been installed?"
+    SVCTL_IDSMGR_INSTALL_RESTART 
+                            "In order to complete the installation, this system must be restarted.\n\nDo you want to restart the system now?"
+    SVCTL_IDSMGR_REMOVE_RESTART 
+                            "In order to complete the uninstallation, this system must be restarted.\n\nDo you want to restart the system now?"
+    SVCTL_IDSMGR_RESTART_FAILED 
+                            "The system could not be restarted at this time"
+END
+
+STRINGTABLE DISCARDABLE 
+BEGIN
+    SVCTL_IDSINST_INSTALLERR_FMT "The %s service could not be installed"
+    SVCTL_IDSINST_REMOVEERR_FMT "The %s service could not be removed"
+    SVCTL_IDSINST_RECONFIGURE_FMT 
+                            "The %s service has already been installed on this system.\n\nDo you want to restore the configuration of this service?"
+    SVCTL_IDSINST_STOPSERVICE_FMT "Attempting to stop the %s service"
+    SVCTL_IDSINST_STOPDEPENDENTS_FMT 
+                            "In order to stop the %s service, the following additional services must also be stopped:"
+    SVCTL_IDSINST_STOPDEPENDENTS_FOOTER 
+                            "Do you want to stop these additional services?"
+END
+
+#endif    // English (U.S.) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+
