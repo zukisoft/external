@@ -388,14 +388,14 @@ DWORD ServiceInstall::Install(const ServiceBase *pService, LPCTSTR pszUserName,
 
 DWORD ServiceInstall::Remove(const ServiceBase *pService) const
 {
-	ServiceControl			svcControl;			// Service control object
-	LPENUM_SERVICE_STATUS	pDependents;		// Services that depend on this one
-	DWORD					cDependents = 0;	// Number of dependent services
-	List					listDependents;		// List of dependent services
-	bool					bRestart = false;	// Flag indicating system restart
-	DWORD					dwIndex;			// Loop index variable
-	INT_PTR					nResult;			// Result from user input
-	DWORD					dwResult;			// Result from function call
+	ServiceControl			svcControl;				// Service control object
+	LPENUM_SERVICE_STATUS	pDependents = NULL;		// Services that depend on this one
+	DWORD					cDependents = 0;		// Number of dependent services
+	List					listDependents;			// List of dependent services
+	bool					bRestart = false;		// Flag indicating system restart
+	DWORD					dwIndex;				// Loop index variable
+	INT_PTR					nResult;				// Result from user input
+	DWORD					dwResult;				// Result from function call
 
 	_ASSERTE(pService != NULL);						// Bad ServiceBase pointer
 	if(!pService) return ERROR_INVALID_PARAMETER;	// Bad ServiceBase pointer
