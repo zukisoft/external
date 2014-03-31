@@ -105,8 +105,9 @@ DWORD ServiceInstall::ConfigureService(const ServiceBase *pService,
 
 	if((dwServiceType & SERVICE_WIN32_OWN_PROCESS) == SERVICE_WIN32_OWN_PROCESS) {
 
-		strBinaryPath += _T(":");				// Append a colon
+		strBinaryPath += _T(":\"");				// Append a colon and quote
 		strBinaryPath += pService->Name;		// Append service key name
+		strBinaryPath += _T("\"");				// Append closing quote
 	}
 	
 	// <--- SETUP SERVICE LOGON ACCOUNT -----------------------------
