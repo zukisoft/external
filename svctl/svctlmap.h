@@ -89,12 +89,6 @@ public:
 
 	explicit ServiceMapEntry(const SERVICE_MAP_ENTRY &rhs) : m_pService(NULL)
 	{
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(rhs.pfnConstruct)));
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(rhs.pfnServiceMain)));
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(rhs.pfnGetServiceName)));
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(rhs.pfnGetDisplayName)));
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(rhs.pfnGetServiceType)));
-
 		// Copy the contents of the SERVICE_MAP_ENTRY into our class object
 		
 		memcpy(static_cast<PSERVICE_MAP_ENTRY>(this), &rhs, sizeof(SERVICE_MAP_ENTRY));

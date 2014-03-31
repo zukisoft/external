@@ -75,9 +75,6 @@ DWORD ServiceControl::GetDependents(LPENUM_SERVICE_STATUS *ppDependents,
 	DWORD					cbEnumStatus;	// Size of enumeration buffer
 	DWORD					cDependents;	// Number of dependent services
 
-	_ASSERTE(!IsBadWritePtr(ppDependents, sizeof(LPENUM_SERVICE_STATUS)));
-	_ASSERTE(!IsBadWritePtr(pcDependents, sizeof(DWORD)));
-
 	*ppDependents = NULL;				// Initialize [out] pointer to NULL
 	*pcDependents = 0;					// Initialize [out] counter to zero
 	

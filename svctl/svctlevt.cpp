@@ -145,8 +145,6 @@ void Event::SetBinaryData(const void *pvData, DWORD cbData)
 
 	if((pvData == NULL) || (cbData == 0)) { m_binaryData.Free(); return; }
 
-	_ASSERTE(!IsBadReadPtr(pvData, cbData));		// Check memory access
-
 	// Attempt to resize the contained buffer and copy in the provided buffer
 
 	if(m_binaryData.ReAllocate(cbData)) memcpy(m_binaryData, pvData, cbData);
@@ -454,9 +452,6 @@ DWORD ServiceEventsBase::LogEvent(DWORD dwEventId, LPCTSTR *rgszInserts,
 	BOOL				bResult;				// Result from function call
 
 	// Check access to all of the pointer-based data in _DEBUG builds
-
-	if(pvBinaryData) { _ASSERTE(!IsBadReadPtr(pvBinaryData, cbBinaryData)); }
-	if(rgszInserts)  { _ASSERTE(!IsBadReadPtr(rgszInserts, (cInserts * sizeof(LPCTSTR)))); }
 	if(psidUser)     { _ASSERTE(IsValidSid(psidUser)); }
 
 	// Convert the severity and category codes if caller is using auto types

@@ -145,9 +145,6 @@ inline HANDLE WINAPI CreateThread(LPSECURITY_ATTRIBUTES lpThreadAttributes,
 	DWORD dwStackSize, LPTHREAD_START_ROUTINE lpStartAddress, 
 	LPVOID lpParameter, DWORD dwCreationFlags, LPDWORD lpThreadId)
 {
-	_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(lpStartAddress)));
-	_ASSERTE(!IsBadWritePtr(lpThreadId, sizeof(DWORD)));
-
 #ifndef SVCTL_NO_CRT
 
 	// If there is any possibility of the CRT, we have to use _beginthreadex(),

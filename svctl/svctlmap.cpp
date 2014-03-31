@@ -253,11 +253,6 @@ const bool ServiceMap::ValidateServiceMap(const PSERVICE_MAP pServiceMap) const
 
 	for(pEntryOuter = pServiceMap; pEntryOuter->pfnConstruct; pEntryOuter++) {
 
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(pEntryOuter->pfnGetDisplayName)));
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(pEntryOuter->pfnGetServiceName)));
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(pEntryOuter->pfnGetServiceType)));
-		_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(pEntryOuter->pfnServiceMain)));
-
 		if( (!pEntryOuter->pfnGetDisplayName) || (!pEntryOuter->pfnGetServiceName) || 
 			(!pEntryOuter->pfnGetServiceType) || (!pEntryOuter->pfnServiceMain) ) 
 			return false;

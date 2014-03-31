@@ -48,8 +48,6 @@ const TCHAR INSTALLER_SERVICE_ARGUMENT[]		= _T(" -service");
 
 DWORD InstallStatus(DWORD dwStatus, bool *pbRestart)
 {
-	_ASSERTE(!IsBadWritePtr(pbRestart, sizeof(bool)));	// Test [out] ptr
-	
 	// If the status code is either REBOOT_REQUIRED or RESTART_REQUIRED,
 	// set the boolean flag and change the status code back to ERROR_SUCCESS
 	
@@ -578,8 +576,6 @@ inline void ServiceInstall::SetServiceFailureActions(SC_HANDLE hService,
 	// If the provided pointer is non-NULL, set up the custom failure actions
 
 	if(pActions) {
-
-		_ASSERTE(!IsBadReadPtr(pActions, sizeof(SERVICE_FAILURE_ACTIONS)));
 		ChangeServiceConfig2(hService, SERVICE_CONFIG_FAILURE_ACTIONS, pActions);
 	}
 
