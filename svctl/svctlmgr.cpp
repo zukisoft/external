@@ -444,8 +444,6 @@ DWORD ServiceManager::LoadServiceHolder(ServiceHolder &svcHolder,
 	if(cServices == 0) return ERROR_SUCCESS;	// Nothing to do
 
 	// Make sure that the provided array pointer is non-NULL
-	
-	_ASSERTE(!IsBadReadPtr(rgszServices, cServices * sizeof(LPCTSTR)));
 	if(!rgszServices) return ERROR_INVALID_PARAMETER;
 
 	// Iterate through the service names, and attempt to push them all

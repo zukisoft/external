@@ -56,7 +56,6 @@ ParameterEntry::ParameterEntry(DWORD dwType, LPCTSTR pszName, const void *pvDefa
 	if(pvDefault) {
 
 		_ASSERTE(cbDefault > 0);						// Should not be zero
-		_ASSERTE(!IsBadReadPtr(pvDefault, cbDefault));	// Check memory access
 
 		if(m_puBuffer.Allocate(cbDefault)) memcpy(m_puBuffer, pvDefault, cbDefault);
 	}
@@ -141,9 +140,6 @@ DWORD ParameterEntry::SetData(const void *pvData, DWORD cbData)
 
 		// Attempt to reallocate our contained value buffer, and copy
 		// in the new value contents as specified by the caller
-		
-		_ASSERTE(!IsBadReadPtr(pvData, cbData));	// Test memory access
-
 		if(!m_puBuffer.ReAllocate(cbData)) return ERROR_NOT_ENOUGH_MEMORY;
 		else memcpy(m_puBuffer, pvData, cbData);
 	}

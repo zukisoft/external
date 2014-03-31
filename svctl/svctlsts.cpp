@@ -154,7 +154,6 @@ DWORD ServiceStatus::Init(LPCTSTR pszServiceName, LPHANDLER_FUNCTION_EX pfnHandl
 	DWORD				dwResult;				// Result from function call
 	
 	_ASSERTE(pszServiceName != NULL);
-	_ASSERTE(!IsBadCodePtr(reinterpret_cast<FARPROC>(pfnHandler)));
 	_ASSERTE(dwServiceType != 0);
 	
 	// Check to make sure that the required kernel objects were successfully
