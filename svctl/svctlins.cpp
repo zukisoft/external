@@ -33,7 +33,6 @@ BEGIN_NAMESPACE(SVCTL)
 
 const TCHAR	INSTALLER_LOCALSYSTEM_ACCOUNT[]		= _T(".\\LocalSystem");
 const TCHAR INSTALLER_BLANK_STRING[]			= _T("");
-const TCHAR INSTALLER_SERVICE_ARGUMENT[]		= _T(" -service");
 
 //---------------------------------------------------------------------------
 // SVCTL::InstallStatus
@@ -98,17 +97,18 @@ DWORD ServiceInstall::ConfigureService(const ServiceBase *pService,
 	// <--- SETUP SERVICE BINARY PATH -------------------------------
 
 	if(!strBinaryPath.LoadModuleName()) return GetLastError();
-	strBinaryPath += INSTALLER_SERVICE_ARGUMENT;
 
 	// OWN_PROCESS services require the service key name be appended to the
 	// "-service" argument so ServiceManager knows how to dispatch it
-
 	if((dwServiceType & SERVICE_WIN32_OWN_PROCESS) == SERVICE_WIN32_OWN_PROCESS) {
 
-		strBinaryPath += _T(":\"");				// Append a colon and quote
+		strBinaryPath += _T(" \"-service:");	// Append quote and argument
 		strBinaryPath += pService->Name;		// Append service key name
 		strBinaryPath += _T("\"");				// Append closing quote
 	}
+
+	// SHARE_PROCESS services dispatch all services in the module
+	else strBinaryPath += _T(" -service");
 	
 	// <--- SETUP SERVICE LOGON ACCOUNT -----------------------------
 
