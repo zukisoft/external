@@ -399,7 +399,7 @@ DWORD ServiceInstall::Remove(const ServiceBase *pService) const
 	_ASSERTE(pService != NULL);						// Bad ServiceBase pointer
 	if(!pService) return ERROR_INVALID_PARAMETER;	// Bad ServiceBase pointer
 	
-	// <--- TEST EXISTANCE AND ENUMERATE DEPENDENTS -----------------
+	// <--- TEST EXISTENCE AND ENUMERATE DEPENDENTS -----------------
 	
 	dwResult = svcControl.Open(pService->Name);		// Open the target service
 	
