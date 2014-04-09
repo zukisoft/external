@@ -102,6 +102,7 @@
 
 #include <assert.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
 #include <algorithm>
@@ -118,6 +119,13 @@
 #ifndef NDEBUG
 #define NDEBUG 1
 #endif
+
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#pragma push_macro("max")
+#undef max
+#endif 
 
 namespace btree {
 
@@ -860,8 +868,8 @@ class btree : public Params::key_compare {
   typedef typename node_type::root_fields root_fields;
   typedef typename Params::is_key_compare_to is_key_compare_to;
 
-  friend class btree_internal_locate_plain_compare;
-  friend class btree_internal_locate_compare_to;
+  friend struct btree_internal_locate_plain_compare;
+  friend struct btree_internal_locate_compare_to;
   typedef typename if_<
     is_key_compare_to::value,
     btree_internal_locate_compare_to,
@@ -1398,10 +1406,10 @@ class btree : public Params::key_compare {
   // key_compare_checker() to instantiate and then figure out the size of the
   // return type of key_compare_checker() at compile time which we then check
   // against the sizeof of big_.
-  COMPILE_ASSERT(
-      sizeof(key_compare_checker(key_compare_helper()(key_type(), key_type()))) ==
-      sizeof(big_),
-      key_comparison_function_must_return_bool);
+//  COMPILE_ASSERT(
+//      sizeof(key_compare_checker(key_compare_helper(key_type(), key_type()))) ==
+//      sizeof(big_),
+//      key_comparison_function_must_return_bool);
 
   // Note: We insist on kTargetValues, which is computed from
   // Params::kTargetNodeSize, must fit the base_fields::field_type.
@@ -2390,5 +2398,9 @@ int btree<P>::internal_verify(
 }
 
 } // namespace btree
+
+#if defined(_MSC_VER)
+#pragma pop_macro("max")
+#endif
 
 #endif  // UTIL_BTREE_BTREE_H__
