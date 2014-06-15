@@ -42,16 +42,69 @@ ServiceProcessType GetServiceProcessType(const tchar_t* name)
 	DWORD			value = 0;					// REG_DWORD value buffer
 	DWORD			cb = sizeof(value);			// Size of value buffer
 
-	// Attempt to open the service registry key with read-only access
-	tstring path = tstring(_T("SYSTEM\\CurrentControlSet\\Services\\")) + name;
-	if(RegOpenKeyEx(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &key) == ERROR_SUCCESS) {
+	// Attempt to open the services registry key with read-only access
+	if(RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T("SYSTEM\\CurrentControlSet\\Services"), 0, KEY_READ, &key) == ERROR_SUCCESS) {
 		
 		// Attempt to grab the Type REG_DWORD value from the registry and close the key
-		RegQueryValueEx(key, _T("Type"), nullptr, nullptr, reinterpret_cast<LPBYTE>(&value), &cb);
+		RegGetValue(key, name, _T("Type"), RRF_RT_REG_DWORD, nullptr, &value, &cb);
 		RegCloseKey(key);
 	}
 
 	return static_cast<ServiceProcessType>(value);
+}
+
+//-----------------------------------------------------------------------------
+// svctl::parameter_base
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// parameter_base::Bind
+//
+// Binds the parameter to the parent registry key
+//
+// Arguments:
+//
+//	key		- Parent Parameters registry key handle
+//	name	- Registry value name to bind the parameter to
+
+void parameter_base::Bind(HKEY key, const tchar_t* name) 
+{
+	lock critsec(m_lock);
+
+	m_key = key;
+	m_name = name;
+}
+
+//-----------------------------------------------------------------------------
+// parameter_base::IsBound (protected)
+//
+// Determines if the parameter has been bound to the registry or not
+//
+// Arguments:
+//
+//	NONE
+
+bool parameter_base::IsBound(void) const
+{
+	lock critsec(m_lock);
+	return (m_key != nullptr);
+}
+
+//-----------------------------------------------------------------------------
+// parameter_base::Unbind
+//
+// Unbinds the parameter from the parent registry key
+//
+// Arguments:
+//
+//	NONE
+
+void parameter_base::Unbind(void)
+{
+	lock critsec(m_lock);
+
+	m_key = nullptr;
+	m_name.clear();
 }
 
 //-----------------------------------------------------------------------------
@@ -129,8 +182,9 @@ DWORD service::ControlHandler(ServiceControl control, DWORD eventtype, void* eve
 	// Nothing should be coming in from the service control manager when stopped
 	if(m_status == ServiceStatus::Stopped) return ERROR_CALL_NOT_IMPLEMENTED;
 
-	// INTERROGATE, STOP, PAUSE and CONTINUE are special case handlers
+	// INTERROGATE, PARAMCHANGE, STOP, PAUSE and CONTINUE are special case handlers
 	if(control == ServiceControl::Interrogate) return ERROR_SUCCESS;
+	else if(control == ServiceControl::ParameterChange) { ReloadParameters(); return ERROR_SUCCESS; }
 	else if(control == ServiceControl::Stop) { Stop(); return ERROR_SUCCESS; }
 	else if(control == ServiceControl::Pause) { Pause(); return ERROR_SUCCESS; }
 	else if(control == ServiceControl::Continue) { Continue(); return ERROR_SUCCESS; }
@@ -159,6 +213,20 @@ DWORD service::ControlHandler(ServiceControl control, DWORD eventtype, void* eve
 }
 
 //-----------------------------------------------------------------------------
+// service::IterateParameters (protected)
+//
+// Iterates over all parameters defined for the service and executes a function
+//
+// Arguments:
+//
+//	func		- Function to pass each parameter name and reference to
+
+void service::IterateParameters(std::function<void(const tstring& name, parameter_base& param)> func)
+{
+	// Default implementation has no parameters to iterate
+}
+
+//-----------------------------------------------------------------------------
 // service::getAcceptedControls (private)
 //
 // Determines what SERVICE_ACCEPT_XXXX codes the service will respond to based
@@ -170,7 +238,8 @@ DWORD service::ControlHandler(ServiceControl control, DWORD eventtype, void* eve
 
 DWORD service::getAcceptedControls(void) const
 {
-	DWORD accept = 0;
+	// All services now support PARAMCHANGE by default due to svctl::parameter implementation
+	DWORD accept = SERVICE_ACCEPT_PARAMCHANGE;
 
 	// Derive what controls this service should report based on what service control handlers have
 	// been implemented in the derived class
@@ -238,6 +307,21 @@ DWORD service::Pause(void)
 }
 
 //-----------------------------------------------------------------------------
+// service::ReloadParameters
+//
+// Reloads the values for all bound parameter member variables
+//
+// Arguments:
+//
+//	NONE
+
+void service::ReloadParameters(void)
+{
+	// This can be done asynchronously; just iterate each parameter and reload it's value from the registry
+	std::async(std::launch::async, [=]() { IterateParameters([=](const tstring&, parameter_base& param) { param.Load(); }); });
+}
+
+//-----------------------------------------------------------------------------
 // service::ServiceMain
 //
 // Service instance entry point
@@ -249,6 +333,8 @@ DWORD service::Pause(void)
 
 void service::ServiceMain(int argc, tchar_t** argv)
 {
+	HKEY keyparams = nullptr;			// Service parameters registry key
+
 	_ASSERTE(argc);						// Service name = argv[0]
 
 	// Read the service process type flags dynamically from the registry
@@ -272,9 +358,18 @@ void service::ServiceMain(int argc, tchar_t** argv)
 
 	try {
 
-		// Start the service and just wait here until it's stopped
+		// Service is starting; report SERVICE_START_PENDING
 		SetStatus(ServiceStatus::StartPending);
+
+		// Open or create the Parameters registry key for this service and bind the parameters
+		if(RegCreateKeyEx(HKEY_LOCAL_MACHINE, (tstring(_T("System\\CurrentControlSet\\Services\\")) + argv[0] + _T("\\Parameters")).c_str(), 
+			0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &keyparams, nullptr) != ERROR_SUCCESS) throw winexception();
+		IterateParameters([=](const tstring& name, parameter_base& param) { param.Bind(keyparams, name.c_str()); param.Load(); });
+
+		// Derived service class startup
 		OnStart(argc, argv);
+
+		// Service is now running; wait for the STOP event object to be signaled
 		SetStatus(ServiceStatus::Running);
 		WaitForSingleObject(m_stopsignal, INFINITE);
 	}
@@ -292,6 +387,10 @@ void service::ServiceMain(int argc, tchar_t** argv)
 		try { SetStatus(ServiceStatus::Stopped, ERROR_SERVICE_SPECIFIC_ERROR, static_cast<DWORD>(E_FAIL)); }
 		catch(...) { /* CAN'T DO ANYTHING ELSE RIGHT NOW */ }
 	}
+
+	// Unbind all of the service parameters and close the parameters registry key
+	IterateParameters([](const tstring&, parameter_base& param) { param.Unbind(); });
+	if(keyparams) RegCloseKey(keyparams);
 }
 
 //-----------------------------------------------------------------------------

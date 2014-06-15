@@ -43,6 +43,7 @@
 #include <Windows.h>
 
 #pragma warning(push, 4)
+#pragma warning(disable:4127)			// conditional expression is constant
 
 //-----------------------------------------------------------------------------
 // GENERAL DECLARATIONS
@@ -493,6 +494,180 @@ namespace svctl {
 		LPSERVICE_MAIN_FUNCTION m_servicemain;
 	};
 
+	// svctl::parameter_base
+	//
+	// Base class for template-specific service ss
+	class parameter_base
+	{
+	public:
+
+		// Destructor
+		virtual ~parameter_base()=default;
+
+		// Bind
+		//
+		// Binds the parameter to the parent key and value name
+		void Bind(HKEY key, const tchar_t* name);
+
+		// Load
+		//
+		// Loads the parameter value from the registry
+		virtual void Load(void) = 0;
+
+		// Unbind
+		//
+		// Unbinds the parameter
+		void Unbind(void);
+
+	protected:
+
+		// Constructor
+		parameter_base()=default;
+
+		// IsBound
+		//
+		// Determines if the parameter has been bound to the registry
+		bool IsBound(void) const;
+
+		// ReadValue<trivial>
+		//
+		// Generic version of ReadValue for trivial data types
+		template <typename _type> _type ReadValue(DWORD format)
+		{
+			static_assert(std::is_trivial<_type>::value, "data type is not trivial; ReadValue<> must be specialized");
+
+			_type		value;							// Value to be read from registry
+			DWORD		length = sizeof(_type);			// Length of the value buffer
+
+			// Attempt to read the binary value from the registry, set data to zeros on failure
+			RegGetValue(m_key, nullptr, m_name.c_str(), format | RRF_ZEROONFAILURE, nullptr, &value, &length);
+			return value;
+		}
+
+		// ReadValue<tstring>
+		//
+		// Specialization of ReadValue<> for REG_SZ / REG_EXPAND_SZ
+		template <> tstring ReadValue<tstring>(DWORD format)
+		{
+			DWORD length = 0;
+
+			// Get the length of the buffer required to hold the string
+			LONG result = RegGetValue(m_key, nullptr, m_name.c_str(), format, nullptr, nullptr, &length);
+			if(result != ERROR_SUCCESS) return tstring();
+
+			// Allocate a local std::vector<> as the backing storage and read the value from the registry
+			std::vector<uint8_t> buffer(length);
+			RegGetValue(m_key, nullptr, m_name.c_str(), format | RRF_ZEROONFAILURE, nullptr, buffer.data(), &length);
+
+			// Convert the registry value into a tstring instance
+			return tstring(reinterpret_cast<tchar_t*>(buffer.data()));
+		}
+
+		// ReadValue<std::vector<tstring>>
+		//
+		// Specialization of ReadValue<> for REG_MULTI_SZ
+		template <> std::vector<tstring> ReadValue<std::vector<tstring>>(DWORD format)
+		{
+			DWORD length = 0;
+
+			// Get the length of the buffer required to hold the string array
+			LONG result = RegGetValue(m_key, nullptr, m_name.c_str(), format, nullptr, nullptr, &length);
+			if(result != ERROR_SUCCESS) return std::vector<tstring>();
+
+			// Allocate a local std::vector<> as the backing storage and read the value from the registry
+			std::vector<uint8_t> buffer(length);
+			RegGetValue(m_key, nullptr, m_name.c_str(), format | RRF_ZEROONFAILURE, nullptr, buffer.data(), &length);
+
+			// Create a collection of tstring objects, one for each string in the returned array
+			std::vector<tstring> value;
+			const tchar_t* current = reinterpret_cast<const tchar_t*>(buffer.data());
+			while((current) && (*current)) {
+
+				value.push_back(tstring(current));
+				current += _tcslen(current) + 1;
+			}
+
+			return value;
+		}
+
+		// m_key
+		//
+		// Bound registry parent key handle
+		HKEY m_key = nullptr;
+
+		// m_lock
+		//
+		// Synchronization object
+		critical_section m_lock;
+
+		// m_name
+		//
+		// Bound registry value name
+		tstring m_name;
+
+	private:
+
+		parameter_base(const parameter_base&)=delete;
+		parameter_base& operator=(const parameter_base&)=delete;
+	};
+
+	// svctl::parameter
+	//
+	// Service parameter template class
+	//
+	//	_type		- Value type
+	//	_format		- Format flags to pass into RegGetValue
+	//	_inittype	- Type used with an initializer list
+	//	_zeroinit	- Flag that the type can be zero-initialized by default
+
+	template<typename _type, DWORD _format, typename _inittype = _type, bool _zeroinit = std::is_trivial<_type>::value>
+	class parameter : public parameter_base
+	{
+	public:
+
+		// Not intended for use with pointer or reference data types
+		static_assert(!std::is_pointer<_type>::value, "Service parameters cannot be pointer types");
+		static_assert(!std::is_reference<_type>::value, "Service parameters cannot be reference types");
+
+		// Constructors
+		parameter() { if(_zeroinit) memset(&m_value, 0, sizeof(_type)); }
+		explicit parameter(_inittype defvalue) : m_value({defvalue}) {}
+		
+		// TODO: This does not work in Visual C++ 2013, appears to be a bug in the compiler that 
+		// prevents using an initializer_list as a non-static member variable initializer
+		//
+		//parameter(std::initializer_list<_inittype> init) : m_value(init) {}
+
+		// Destructor
+		virtual ~parameter()=default;
+
+		// typecasting operator
+		operator _type() const
+		{
+			svctl::lock critsec(m_lock);
+			return m_value;
+		}
+
+	private:
+
+		parameter(const parameter&)=delete;
+		parameter& operator=(const parameter&)=delete;
+
+		// Load (svctl::parameter_base)
+		//
+		// Invoked in respose to a SERVICE_CONTROL_PARAM_CHANGE; loads the value
+		virtual void Load(void)
+		{
+			svctl::lock critsec(m_lock);
+			if(IsBound()) m_value = parameter_base::ReadValue<_type>(_format);
+		}
+
+		// m_value
+		//
+		// Cached parameter value
+		_type m_value;
+	};
+
 	// svctl::service
 	//
 	// Primary service base class
@@ -508,20 +683,30 @@ namespace svctl {
 		// Instance Constructor
 		service()=default;
 
-		// OnStart
-		//
-		// Invoked when the service is started; must be implemented in the service
-		virtual void OnStart(int argc, LPTSTR* argv) = 0;
-
 		// Continue
 		//
 		// Continues the service from a paused state
 		DWORD Continue(void);
 
+		// IterateParameters
+		//
+		// Iterates over the collection of parameters and executes a function against each
+		virtual void IterateParameters(std::function<void(const tstring& name, parameter_base& param)> func);
+
+		// OnStart
+		//
+		// Invoked when the service is started; must be implemented in the service
+		virtual void OnStart(int argc, LPTSTR* argv) = 0;
+
 		// Pause
 		//
 		// Pauses the service
 		DWORD Pause(void);
+
+		// ReloadParameters
+		//
+		// Reloads all of the bound service parameter values
+		void ReloadParameters(void);
 
 		// ServiceMain
 		//
@@ -797,6 +982,34 @@ public:
 	Service()=default;
 	virtual ~Service()=default;
 
+protected:
+
+	// BinaryParameter
+	//
+	// Generic REG_BINARY parameter for any trivial data type
+	template <class _type>
+	using BinaryParameter = svctl::parameter<_type, RRF_RT_REG_BINARY>;
+
+	// DWordParameter
+	//
+	// 32-bit unsigned integer parameter
+	using DWordParameter = svctl::parameter<uint32_t, RRF_RT_DWORD>;
+
+	// MultiStringParameter
+	//
+	// Vector of std:basic_string<tchar_t> parameters
+	using MultiStringParameter = svctl::parameter<std::vector<svctl::tstring>, RRF_RT_REG_MULTI_SZ, svctl::tstring>;
+
+	// QWordParameter
+	//
+	// 64-bit unsigned integer parameter
+	using QWordParameter = svctl::parameter<uint64_t, RRF_RT_QWORD>;
+
+	// StringParameter
+	//
+	// std::basic_string<tchar_t> parameter
+	using StringParameter = svctl::parameter<svctl::tstring, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ>;
+	
 private:
 
 	Service(const Service&)=delete;
@@ -828,9 +1041,9 @@ private:
 // Sample usage:
 //
 //	BEGIN_CONTROL_HANDLER_MAP(MyService)
-//		CONTROL_HANDLER(ServiceControl::Stop, OnStop)
-//		CONTROL_HANDLER(ServiceControl::ParamChange, OnParameterChange)
-//		CONTROL_HANDLER(200, OnMyCustomCommand)
+//		CONTROL_HANDLER_ENTRY(ServiceControl::Stop, OnStop)
+//		CONTROL_HANDLER_ENTRY(ServiceControl::ParamChange, OnParameterChange)
+//		CONTROL_HANDLER_ENTRY(200, OnMyCustomCommand)
 //	END_CONTROL_HANDLER_MAP()
 //
 #define BEGIN_CONTROL_HANDLER_MAP(_class) \
@@ -841,13 +1054,41 @@ private:
 		static std::unique_ptr<svctl::control_handler> handlers[] = { \
 		std::make_unique<ServiceControlHandler<__control_map_class>>(ServiceControl::Interrogate, &__control_map_class::__null_handler##_class),
 
-#define CONTROL_HANDLER(_control, _func) \
+#define CONTROL_HANDLER_ENTRY(_control, _func) \
 		std::make_unique<ServiceControlHandler<__control_map_class>>(static_cast<ServiceControl>(_control), &__control_map_class::_func),
 
 #define END_CONTROL_HANDLER_MAP() \
 		}; \
 		static svctl::control_handler_table table { std::make_move_iterator(std::begin(handlers)), std::make_move_iterator(std::end(handlers)) }; \
 		return table; \
+	}
+
+// PARAMETER_MAP
+//
+// Used to declare the IterateParameters virtual function implementation for the service.
+// The map entry defines what the name of the parameter registry value will be and indicates
+// what svctl::parameter<> member variable is to be bound to that registry value.
+//
+// Local module resource identifiers can also be used in lieu of hard-coding the value name
+//
+// Sample usage:
+//
+//	BEGIN_PARAMETER_MAP(MyService)
+//		PARAMETER_ENTRY(_T("TestExpandSz"), m_expandsz)
+//		PARAMETER_ENTRY(IDS_MYDWORD, m_mydword)
+//	END_PARAMETER_MAP()
+//
+//  StringParameter				m_expandsz { _T("defaultstring") };
+//	DWordParameter				m_mydword = 0;
+//	BinaryParameter<mystruct>	m_binparam;
+//
+#define BEGIN_PARAMETER_MAP(_class) \
+	virtual void IterateParameters(std::function<void(const svctl::tstring& name, svctl::parameter_base& param)> func) {
+
+#define PARAMETER_ENTRY(_name, _var) \
+	func(svctl::resstring(_name), _var);
+
+#define END_PARAMETER_MAP() \
 	}
 
 //-----------------------------------------------------------------------------
