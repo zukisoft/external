@@ -31,9 +31,12 @@
 
 // Standard Template Library
 #include <array>
+#include <condition_variable>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <exception>
 #include <string>
 #include <thread>
@@ -181,21 +184,43 @@ namespace svctl {
 	// ANSI string character type
 	typedef char			char_t;
 
-	// svctl::tchar_t, svctl::tstring
+	// svctl::tchar_t, svctl::tstring, svctl::to_tstring<>
 	//
-	// General text character and STL string types
+	// Generic text character, STL string and conversion
 #ifndef _UNICODE
 	typedef char			tchar_t;
 	typedef std::string		tstring;
+
+	template <typename _type>
+	inline typename std::enable_if<std::is_fundamental<_type>::value, tstring>::type to_tstring(_type value) 
+	{
+		return std::to_string(value);
+	}
 #else
 	typedef wchar_t			tchar_t;
 	typedef std::wstring	tstring;
+
+	template <typename _type>
+	inline typename std::enable_if<std::is_fundamental<_type>::value, tstring>::type to_tstring(_type value) 
+	{
+		return std::to_wstring(value);
+	}
 #endif
+
+	// svctl::register_handler_func
+	//
+	// Function used to register a service's control handler callback function
+	typedef std::function<SERVICE_STATUS_HANDLE(LPCTSTR, LPHANDLER_FUNCTION_EX, LPVOID)> register_handler_func;
 
 	// svctl::report_status_func
 	//
 	// Function used to report a service status to the service control manager
 	typedef std::function<void(SERVICE_STATUS&)> report_status_func;
+
+	// svctl::set_status_func
+	//
+	// Function used to set a service status using the handle returned by the register_handler_func
+	typedef std::function<BOOL(SERVICE_STATUS_HANDLE, LPSERVICE_STATUS)> set_status_func;
 
 	// svctl::signal_type
 	//
@@ -260,71 +285,6 @@ namespace svctl {
 	//
 	// Primitive Classes
 	//
-
-	// svctl::critical_section
-	//
-	// Win32 CRITICAL_SECTION wrapper class
-	class critical_section
-	{
-	public:
-
-		// Constructor / Destructor
-		critical_section() { InitializeCriticalSection(&m_cs); }
-		~critical_section() { DeleteCriticalSection(&m_cs); }
-
-		// Enter
-		//
-		// Enters the critical section
-		void Enter(void) const { EnterCriticalSection(&m_cs); }
-
-		// Leave
-		//
-		// Leaves the critical section
-		void Leave(void) const { LeaveCriticalSection(&m_cs); }
-
-	private:
-
-		critical_section(const critical_section&)=delete;
-		critical_section& operator=(const critical_section& rhs)=delete;
-	
-		// m_cs
-		//
-		// Contained CRITICAL_SECTION synchronization object
-		mutable CRITICAL_SECTION m_cs;
-	};
-
-	// svctl::lock
-	//
-	// Provides an automatic enter/leave wrapper around a critical_section
-	class lock
-	{
-	public:
-
-		// Constructor / Destructor
-		explicit lock(const critical_section& cs) : m_cs(cs), m_locked(true) { m_cs.Enter(); }
-		~lock() { if(m_locked) m_cs.Leave(); }
-
-		// Release
-		//
-		// Releases the critical section prior to when the object is unwound
-		void Release(void) { if(m_locked) m_cs.Leave(); m_locked = false; }
-
-	private:
-
-		lock(const lock&)=delete;
-		lock& operator=(const lock&)=delete;
-
-		// m_cs
-		//
-		// Reference to the critical_section object
-		const critical_section&	m_cs;
-
-		// m_locked
-		//
-		// Flag if the critical section is locked; used to release
-		// the critical section before the objectis unwound
-		bool m_locked;
-	};
 
 	// svctl::resstring
 	//
@@ -458,7 +418,7 @@ namespace svctl {
 		// Assignment Operator
 		service_table_entry& operator=(const service_table_entry&)=default;
 
-		// todo
+		// SERVICE_TABLE_ENTRY typecasting operator
 		operator SERVICE_TABLE_ENTRY() const { return { const_cast<tchar_t*>(m_name.c_str()), m_servicemain }; }
 
 		// Name
@@ -527,7 +487,7 @@ namespace svctl {
 		// IsBound
 		//
 		// Determines if the parameter has been bound to the registry
-		bool IsBound(void) const;
+		bool IsBound(void);
 
 		// ReadValue<trivial>
 		//
@@ -602,7 +562,7 @@ namespace svctl {
 		// m_lock
 		//
 		// Synchronization object
-		critical_section m_lock;
+		std::recursive_mutex m_lock;
 
 		// m_name
 		//
@@ -646,9 +606,9 @@ namespace svctl {
 		virtual ~parameter()=default;
 
 		// typecasting operator
-		operator _type() const
+		operator _type()
 		{
-			svctl::lock critsec(m_lock);
+			std::lock_guard<std::recursive_mutex> critsec(m_lock);
 			return m_value;
 		}
 
@@ -656,7 +616,7 @@ namespace svctl {
 		//
 		// Flag if the value has been defaulted or if it has been read from the registry
 		__declspec(property(get=getIsDefaulted)) bool IsDefaulted;
-		bool getIsDefaulted(void) const { svctl::lock critsec(m_lock); return m_defaulted; }
+		bool getIsDefaulted(void) const { std::lock_guard<std::recursive_mutex> critsec(m_lock); return m_defaulted; }
 
 	private:
 
@@ -668,7 +628,7 @@ namespace svctl {
 		// Invoked in respose to a SERVICE_CONTROL_PARAM_CHANGE; loads the value
 		virtual void Load(void)
 		{
-			svctl::lock critsec(m_lock);
+			std::lock_guard<std::recursive_mutex> critsec(m_lock);
 			if(!IsBound()) return;
 
 			try { 
@@ -690,6 +650,28 @@ namespace svctl {
 		//
 		// Cached parameter value
 		_type m_value;
+	};
+
+	// svctl::service_context
+	//
+	// Service runtime context information provided to ServiceMain to
+	// allow for differences in service vs. local application model
+	struct service_context
+	{
+		// ProcessType
+		//
+		// Defines the service process type (unique/shared)
+		ServiceProcessType ProcessType;
+
+		// RegisterHandlerFunc
+		//
+		// Function used by the service to register the control handler
+		register_handler_func RegisterHandlerFunc;
+
+		// SetStatusFunc
+		//
+		// Function used by the service to set status
+		set_status_func SetStatusFunc;
 	};
 
 	// svctl::service
@@ -717,6 +699,19 @@ namespace svctl {
 		// Iterates over the collection of parameters and executes a function against each
 		virtual void IterateParameters(std::function<void(const tstring& name, parameter_base& param)> func);
 
+		// LocalMain
+		//
+		// Entry point when the service is executed as an application
+		template <class _derived>
+		static void LocalMain(DWORD argc, LPTSTR* argv, const service_context& context)
+		{
+			_ASSERTE(argc);					// Service name = argv[0]
+
+			// Create an instance of the derived service class and invoke ServiceMain() with specified context
+			std::unique_ptr<service> instance = std::make_unique<_derived>();
+			instance->Main(static_cast<int>(argc), argv, context);
+		}
+
 		// OnStart
 		//
 		// Invoked when the service is started; must be implemented in the service
@@ -738,8 +733,15 @@ namespace svctl {
 		template <class _derived>
 		static void WINAPI ServiceMain(DWORD argc, LPTSTR* argv)
 		{
+			_ASSERTE(argc);					// Service name = argv[0]
+
+			// When running as a regular service, the process type is read from the registry and the
+			// standard Win32 service API functions are used for registration and status reporting
+			service_context context = { GetServiceProcessType(argv[0]), ::RegisterServiceCtrlHandlerEx, ::SetServiceStatus };
+
+			// Create an instance of the derived service class and invoke ServiceMain()
 			std::unique_ptr<service> instance = std::make_unique<_derived>();
-			instance->ServiceMain(static_cast<int>(argc), argv);
+			instance->Main(static_cast<int>(argc), argv, context);
 		}
 
 		// Stop
@@ -782,7 +784,7 @@ namespace svctl {
 		// ServiceMain
 		//
 		// Service entry point
-		void ServiceMain(int argc, tchar_t** argv);
+		void Main(int argc, tchar_t** argv, const service_context& context);
 
 		// SetNonPendingStatus
 		//
@@ -825,8 +827,8 @@ namespace svctl {
  
 		// m_statuslock;
 		//
-		// CRITICAL_SECTION synchronization object for status updates
-		critical_section m_statuslock;
+		// Synchronization object for status updates
+		std::recursive_mutex m_statuslock;
 
 		// m_statussignal
 		//
@@ -844,6 +846,165 @@ namespace svctl {
 		signal<signal_type::ManualReset> m_stopsignal;
 	};
 
+	// svctl::service_harness
+	//
+	// Test harness to execute a service as an application
+	class service_harness
+	{
+	public:
+	
+		// Constructor / Destructor
+		service_harness();
+		virtual ~service_harness();
+
+		// Continue
+		//
+		// Sends ServiceControl::Continue and waits for ServiceStatus::Running
+		void Continue(void);
+
+		// Pause
+		//
+		// Sends ServiceControl::Pause and waits for ServiceStatus::Paused
+		void Pause(void);
+
+		// SendControl
+		//
+		// Sends a control code to the service
+		DWORD SendControl(ServiceControl control) { return SendControl(control, 0, nullptr); }
+		DWORD SendControl(ServiceControl control, DWORD eventtype, void* eventdata);
+		
+		// Start
+		//
+		// Starts the service, optionally specifying a variadic set of command line arguments.
+		// (Arguments can be C-style strings, fundamental data types, or tstring references)
+		template <typename... _arguments>
+		void Start(LPCTSTR servicename, const _arguments&... arguments)
+		{
+			// Construct a vector<> for the arguments starting with the service name
+			// and recursively invoke one of the variadic overloads until done
+			std::vector<tstring> argvector { servicename };
+			Start(argvector, arguments...);
+		}
+
+		// Stop
+		//
+		// Stops the service; should be called rather than SendControl()
+		// as this also waits for the main thread and resets the status
+		void Stop(void);
+
+		// WaitForStatus
+		//
+		// Waits for the service to reach the specified status
+		bool WaitForStatus(ServiceStatus status, uint32_t timeout = INFINITE);
+
+		// CanContinue
+		//
+		// Determines if the service can be continued
+		__declspec(property(get=getCanContinue)) bool CanContinue;
+		bool getCanContinue(void);
+
+		// CanPause
+		//
+		// Determines if the service can be paused
+		__declspec(property(get=getCanPause)) bool CanPause;
+		bool getCanPause(void);
+
+		// CanStop
+		//
+		// Determines if the service can be stopped
+		__declspec(property(get=getCanStop)) bool CanStop;
+		bool getCanStop(void);
+
+		// Status
+		//
+		// Gets a copy of the current service status
+		__declspec(property(get=getStatus)) SERVICE_STATUS Status;
+		SERVICE_STATUS getStatus(void) { std::lock_guard<std::mutex> critsec(m_statuslock); return m_status; }
+
+	protected:
+
+		// LaunchService
+		//
+		// Invokes the derived service class' LocalMain() entry point
+		virtual void LaunchService(int argc, LPTSTR* argv, const service_context& context) = 0;
+
+	private:
+
+		service_harness(const service_harness&)=delete;
+		service_harness& operator=(const service_harness&)=delete;
+
+		// ServiceControlAccepted (static)
+		//
+		// Checks a ServiceControl against a SERVICE_ACCEPTS_XXXX mask
+		static bool ServiceControlAccepted(ServiceControl control, DWORD mask);
+
+		// Start (variadic)
+		//
+		// Recursive variadic function, converts for a fundamental type argument
+		template <typename _next, typename... _remaining>
+		typename std::enable_if<std::is_fundamental<_next>::value, void>::type
+		Start(std::vector<tstring>& argvector, const _next& next, const _remaining&... remaining)
+		{
+			argvector.push_back(to_tstring(next));
+			Start(argvector, remaining...);
+		}
+
+		// Start (variadic)
+		//
+		// Recursive variadic function, processes an tstring type argument
+		template <typename... _remaining>
+		void Start(std::vector<tstring>& argvector, const tstring& next, const _remaining&... remaining)
+		{
+			argvector.push_back(next);
+			Start(argvector, remaining...);
+		}
+	
+		// Start (variadic)
+		//
+		// Recursive variadic function, processes a generic text C-style string pointer
+		template <typename... _remaining>
+		void Start(std::vector<tstring>& argvector, const tchar_t* next, const _remaining&... remaining)
+		{
+			argvector.push_back(next);
+			Start(argvector, remaining...);
+		}
+	
+		// Start
+		//
+		// Final overload in the variadic chain for Start()
+		void Start(std::vector<tstring>& argvector);
+
+		// m_context
+		//
+		// Context pointer registered for the service control handler
+		void* m_context = nullptr;
+
+		// m_handler
+		//
+		// Service control handler callback function pointer
+		LPHANDLER_FUNCTION_EX m_handler = nullptr;
+
+		// m_mainthread
+		//
+		// Main service thread
+		std::thread m_mainthread;
+
+		// m_status
+		//
+		// Current service status
+		SERVICE_STATUS m_status;
+
+		// m_statuschanged
+		//
+		// Condition variable set when service status has changed
+		std::condition_variable m_statuschanged;
+
+		// m_statuslock
+		//
+		// Critical section to serialize access to the SERVICE_STATUS
+		std::mutex m_statuslock;
+	};
+
 } // namespace svctl
 
 //-----------------------------------------------------------------------------
@@ -851,6 +1012,13 @@ namespace svctl {
 //
 // Namespace: (GLOBAL)
 //-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// ::ServiceException
+//
+// Global namespace alias for svctl::winexception
+
+using ServiceException = svctl::winexception;
 
 //-----------------------------------------------------------------------------
 // ::ServiceControlHandler<>
@@ -909,7 +1077,7 @@ public:
 		else if(m_void_handler_ex) m_void_handler_ex(derived, eventtype, eventdata);
 		else if(m_result_handler) result = m_result_handler(derived);
 		else if(m_result_handler_ex) result = m_result_handler_ex(derived, eventtype, eventdata);
-		else throw svctl::winexception(E_UNEXPECTED);
+		else throw ServiceException(E_UNEXPECTED);
 		
 		return result;
 	}	
@@ -992,6 +1160,34 @@ private:
 };
 
 //-----------------------------------------------------------------------------
+// ::ServiceHarness<>
+//
+// Template version of svctl::service_harness
+
+template <class _service>
+class ServiceHarness : public svctl::service_harness
+{
+public:
+
+	// Constructor / Destructor
+	ServiceHarness()=default;
+	virtual ~ServiceHarness()=default;
+
+private:
+
+	ServiceHarness(const ServiceHarness&)=delete;
+	ServiceHarness& operator=(const ServiceHarness&)=delete;
+
+	// LaunchService (service_harness)
+	//
+	// Launches the derived service by invoking it's LocalMain entry point
+	virtual void LaunchService(int argc, LPTSTR* argv, const svctl::service_context& context)
+	{
+		_service::LocalMain<_service>(argc, argv, context);
+	}
+};
+
+//-----------------------------------------------------------------------------
 // ::Service<>
 //
 // Template version of svctl::service
@@ -1000,6 +1196,7 @@ template <class _derived>
 class Service : public svctl::service
 {
 friend struct ServiceTableEntry<_derived>;
+friend class ServiceHarness<_derived>;
 public:
 
 	// Constructor / Destructor

@@ -69,7 +69,7 @@ ServiceProcessType GetServiceProcessType(const tchar_t* name)
 
 void parameter_base::Bind(HKEY key, const tchar_t* name) 
 {
-	lock critsec(m_lock);
+	std::lock_guard<std::recursive_mutex> critsec(m_lock);
 
 	m_key = key;
 	m_name = name;
@@ -84,9 +84,9 @@ void parameter_base::Bind(HKEY key, const tchar_t* name)
 //
 //	NONE
 
-bool parameter_base::IsBound(void) const
+bool parameter_base::IsBound(void)
 {
-	lock critsec(m_lock);
+	std::lock_guard<std::recursive_mutex> critsec(m_lock);
 	return (m_key != nullptr);
 }
 
@@ -101,7 +101,7 @@ bool parameter_base::IsBound(void) const
 
 void parameter_base::Unbind(void)
 {
-	lock critsec(m_lock);
+	std::lock_guard<std::recursive_mutex> critsec(m_lock);
 
 	m_key = nullptr;
 	m_name.clear();
@@ -148,7 +148,7 @@ const tchar_t* resstring::GetResourceString(unsigned int id, HINSTANCE instance)
 
 DWORD service::Continue(void)
 {
-	lock critsec(m_statuslock);
+	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
 	// Service has to be in a status of PAUSED to accept this control
 	if(m_status != ServiceStatus::Paused) return ERROR_CALL_NOT_IMPLEMENTED;
@@ -177,7 +177,7 @@ DWORD service::Continue(void)
 
 DWORD service::ControlHandler(ServiceControl control, DWORD eventtype, void* eventdata)
 {
-	lock critsec(m_statuslock);
+	std::unique_lock<std::recursive_mutex> critsec(m_statuslock);
 
 	// Nothing should be coming in from the service control manager when stopped
 	if(m_status == ServiceStatus::Stopped) return ERROR_CALL_NOT_IMPLEMENTED;
@@ -189,7 +189,7 @@ DWORD service::ControlHandler(ServiceControl control, DWORD eventtype, void* eve
 	else if(control == ServiceControl::Continue) { Continue(); return ERROR_SUCCESS; }
 
 	// Done with messing about with the current service status; release the critsec
-	critsec.Release();
+	critsec.unlock();
 
 	// PARAMCHANGE is automatically accepted if there are any parameters in the service,
 	// but the derived class may also want to handle it; call it here but don't return
@@ -295,7 +295,7 @@ const control_handler_table& service::getHandlers(void) const
 
 DWORD service::Pause(void)
 {
-	lock critsec(m_statuslock);
+	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
 	// Service has to be in a status of RUNNING to accept this control
 	if(m_status != ServiceStatus::Running) return ERROR_CALL_NOT_IMPLEMENTED;
@@ -327,38 +327,37 @@ void service::ReloadParameters(void)
 }
 
 //-----------------------------------------------------------------------------
-// service::ServiceMain
+// service::Main
 //
 // Service instance entry point
 //
 // Arguments:
 //
-//	argc			- Number of command line arguments
-//	argv			- Array of command line argument strings
+//	argc				- Number of command line arguments
+//	argv				- Array of command line argument strings
+//	context				- Service runtime context information and callbacks
 
-void service::ServiceMain(int argc, tchar_t** argv)
+void service::Main(int argc, tchar_t** argv, const service_context& context)
 {
-	HKEY keyparams = nullptr;			// Service parameters registry key
+	HKEY keyparams = nullptr;						// Service parameters registry key
 
-	_ASSERTE(argc);						// Service name = argv[0]
-
-	// Read the service process type flags dynamically from the registry
-	ServiceProcessType processtype = GetServiceProcessType(argv[0]);
+	_ASSERTE(context.RegisterHandlerFunc);
+	_ASSERTE(context.SetStatusFunc);
 
 	// Define a static HandlerEx callback that calls back into this service instance
 	LPHANDLER_FUNCTION_EX handler = [](DWORD control, DWORD eventtype, void* eventdata, void* context) -> DWORD { 
 		return reinterpret_cast<service*>(context)->ControlHandler(static_cast<ServiceControl>(control), eventtype, eventdata); };
 
 	// Register a service control handler for this service instance
-	SERVICE_STATUS_HANDLE statushandle = RegisterServiceCtrlHandlerEx(argv[0], handler, this);
+	SERVICE_STATUS_HANDLE statushandle = context.RegisterHandlerFunc(argv[0], handler, this);
 	if(statushandle == 0) throw winexception();
 
 	// Define a status reporting function that uses the handle and process type defined above
 	m_statusfunc = [=](SERVICE_STATUS& status) -> void {
 
 		_ASSERTE(statushandle != 0);
-		status.dwServiceType = static_cast<DWORD>(processtype);
-		if(!SetServiceStatus(statushandle, &status)) throw winexception();
+		status.dwServiceType = static_cast<DWORD>(context.ProcessType);
+		if(!context.SetStatusFunc(statushandle, &status)) throw winexception();
 	};
 
 	try {
@@ -367,22 +366,34 @@ void service::ServiceMain(int argc, tchar_t** argv)
 		SetStatus(ServiceStatus::StartPending);
 
 		// Open or create the Parameters registry key for this service and bind the parameters
-		if(RegCreateKeyEx(HKEY_LOCAL_MACHINE, (tstring(_T("System\\CurrentControlSet\\Services\\")) + argv[0] + _T("\\Parameters")).c_str(), 
-			0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &keyparams, nullptr) != ERROR_SUCCESS) throw winexception();
-		IterateParameters([=](const tstring& name, parameter_base& param) { param.Bind(keyparams, name.c_str()); param.Load(); });
+		//
+		// TODO: This doesn't work for local applications not running as administrator, deal with that
+		// perhaps by abstracting the entire method for reading parameters (command line? xml?).  Once
+		// that is fixed up, put back the exception result
+		//
+		//if(RegCreateKeyEx(HKEY_LOCAL_MACHINE, (tstring(_T("System\\CurrentControlSet\\Services\\")) + argv[0] + _T("\\Parameters")).c_str(), 
+		//	0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &keyparams, nullptr) != ERROR_SUCCESS) throw winexception();
+		//IterateParameters([=](const tstring& name, parameter_base& param) { param.Bind(keyparams, name.c_str()); param.Load(); });
 
-		// Derived service class startup
+		// for now just bind/load only if RegCreateKeyEx() is actually successful
+		if(RegCreateKeyEx(HKEY_LOCAL_MACHINE, (tstring(_T("System\\CurrentControlSet\\Services\\")) + argv[0] + _T("\\Parameters")).c_str(), 
+			0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &keyparams, nullptr) == ERROR_SUCCESS) {
+
+			IterateParameters([=](const tstring& name, parameter_base& param) { param.Bind(keyparams, name.c_str()); param.Load(); });
+		}
+
+		// Invoke derived service class startup code
 		OnStart(argc, argv);
 
-		// Service is now running; wait for the STOP event object to be signaled
+		// Service is now running, wait for the event indicating SERVICE_STOPPED has been set
 		SetStatus(ServiceStatus::Running);
 		WaitForSingleObject(m_stopsignal, INFINITE);
 	}
 
 	catch(winexception& ex) { 
 		
-		// Set the service to STOPPED on an unhandled winexception
-		try { SetStatus(ServiceStatus::Stopped, ex.code()); }
+		// Set the service to STOPPED on an unhandled winexception, translate ERROR_SUCCESS into ERROR_SERVICE_SPECIFIC
+		try { SetStatus(ServiceStatus::Stopped, (ex.code() != ERROR_SUCCESS) ? ex.code() : ERROR_SERVICE_SPECIFIC_ERROR); }
 		catch(...) { /* CAN'T DO ANYTHING ELSE RIGHT NOW */ }
 	}
 
@@ -394,6 +405,8 @@ void service::ServiceMain(int argc, tchar_t** argv)
 	}
 
 	// Unbind all of the service parameters and close the parameters registry key
+	//
+	// TODO: moved these here on purpose, but should this be done before setting SERVICE_STOPPED?
 	IterateParameters([](const tstring&, parameter_base& param) { param.Unbind(); });
 	if(keyparams) RegCloseKey(keyparams);
 }
@@ -411,7 +424,7 @@ void service::ServiceMain(int argc, tchar_t** argv)
 
 void service::SetNonPendingStatus(ServiceStatus status, uint32_t win32exitcode, uint32_t serviceexitcode)
 {
-	lock critsec(m_statuslock);
+	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
 	_ASSERTE(m_statusfunc);							// Needs to be set
 	_ASSERTE(!m_statusworker.joinable());			// Should not be running
@@ -440,7 +453,7 @@ void service::SetNonPendingStatus(ServiceStatus status, uint32_t win32exitcode, 
 
 void service::SetPendingStatus(ServiceStatus status)
 {
-	lock critsec(m_statuslock);
+	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
 	_ASSERTE(m_statusfunc);							// Needs to be set
 	_ASSERTE(!m_statusworker.joinable());			// Should not be running
@@ -496,7 +509,7 @@ void service::SetPendingStatus(ServiceStatus status)
 
 void service::SetStatus(ServiceStatus status, uint32_t win32exitcode, uint32_t serviceexitcode)
 {
-	lock critsec(m_statuslock);				// Automatic CRITICAL_SECTION wrapper
+	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
 	// Check for a duplicate status; pending states are managed automatically
 	if(status == m_status) return;
@@ -556,7 +569,7 @@ void service::SetStatus(ServiceStatus status, uint32_t win32exitcode, uint32_t s
 
 DWORD service::Stop(DWORD win32exitcode, DWORD serviceexitcode)
 {
-	lock critsec(m_statuslock);
+	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
 	// Service cannot be stopped unless it's RUNNING or PAUSED, this could cause
 	// potential race conditions in the derived service class; better to block it
@@ -573,6 +586,324 @@ DWORD service::Stop(DWORD win32exitcode, DWORD serviceexitcode)
 	});
 
 	return ERROR_SUCCESS;
+}
+
+//-----------------------------------------------------------------------------
+// svctl::service_harness
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// service_harness Constructor
+//
+// Arguments:
+//
+//	NONE
+
+service_harness::service_harness()
+{
+	// Initialize the SERVICE_STATUS to the default state
+	memset(&m_status, 0, sizeof(SERVICE_STATUS));
+	m_status.dwCurrentState = static_cast<DWORD>(ServiceStatus::Stopped);
+}
+
+//-----------------------------------------------------------------------------
+// service_harness Destructor
+
+service_harness::~service_harness()
+{
+	// If the main service thread is still active, it needs to be detached
+	// and terminated to avoid a runtime error when the process exits
+	if(m_mainthread.joinable()) {
+
+		HANDLE thread = m_mainthread.native_handle();
+		m_mainthread.detach();
+		TerminateThread(thread, static_cast<DWORD>(E_ABORT));
+	}
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::Continue
+//
+// Sends SERVICE_CONTROL_CONTINUE to the service, throws an exception if the
+// service does not accept the control or stops prematurely
+//
+// Arguments:
+//
+//	NONE
+
+void service_harness::Continue(void)
+{
+	DWORD result = SendControl(ServiceControl::Continue);
+	if(result != ERROR_SUCCESS) throw winexception(result);
+
+	WaitForStatus(ServiceStatus::Running);
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::getCanContinue
+//
+// Determines if the service can be continued
+
+bool service_harness::getCanContinue(void)
+{
+	std::lock_guard<std::mutex> critsec(m_statuslock);
+
+	// If the service is not running, it cannot be controlled at all
+	if(!m_mainthread.joinable()) return false;
+
+	// The service can be continued if it's in a PAUSED state and accepts the control
+	return ((static_cast<ServiceStatus>(m_status.dwCurrentState) == ServiceStatus::Paused) && 
+		ServiceControlAccepted(ServiceControl::Continue, m_status.dwControlsAccepted));
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::getCanPause
+//
+// Determines if the service can be paused
+
+bool service_harness::getCanPause(void)
+{
+	std::lock_guard<std::mutex> critsec(m_statuslock);
+
+	// If the service is not running, it cannot be controlled at all
+	if(!m_mainthread.joinable()) return false;
+
+	// The service can be paused if it's in a RUNNING state and accepts the control
+	return ((static_cast<ServiceStatus>(m_status.dwCurrentState) == ServiceStatus::Running) && 
+		ServiceControlAccepted(ServiceControl::Pause, m_status.dwControlsAccepted));
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::getCanStop
+//
+// Determines if the service can be stopped
+
+bool service_harness::getCanStop(void)
+{
+	std::lock_guard<std::mutex> critsec(m_statuslock);
+
+	// If the service is not running, it cannot be controlled at all
+	if(!m_mainthread.joinable()) return false;
+
+	// The service can be stopped if it's not in a STOPPED or STOP_PENDING state and accepts the control
+	return ((static_cast<ServiceStatus>(m_status.dwCurrentState) != ServiceStatus::Stopped) && 
+		(static_cast<ServiceStatus>(m_status.dwCurrentState) != ServiceStatus::StopPending) &&
+		ServiceControlAccepted(ServiceControl::Stop, m_status.dwControlsAccepted));
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::Pause
+//
+// Sends SERVICE_CONTROL_PAUSE to the service, throws an exception if the
+// service does not accept the control or stops prematurely
+//
+// Arguments:
+//
+//	NONE
+
+void service_harness::Pause(void)
+{
+	DWORD result = SendControl(ServiceControl::Pause);
+	if(result != ERROR_SUCCESS) throw winexception(result);
+
+	WaitForStatus(ServiceStatus::Paused);
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::SendControl
+//
+// Sends a control to the service
+//
+// Arguments:
+//
+//	control		- Control to be sent to the service
+//	eventtype	- Specifies a control-specific event type code (uncommon)
+//	eventdata	- Specifies control-specific event data (uncommon)
+
+DWORD service_harness::SendControl(ServiceControl control, DWORD eventtype, void* eventdata)
+{
+	std::unique_lock<std::mutex> critsec(m_statuslock);
+
+	// If the main service thread is not running, that's the same result as SERVICE_STOPPED
+	if(!m_mainthread.joinable()) return ERROR_SERVICE_NOT_ACTIVE;
+
+	// Certain service statuses prevent the service from being controlled at all, see ControlService() on MSDN
+	switch(static_cast<ServiceStatus>(m_status.dwCurrentState)) {
+
+		// SERVICE_STOPPED and SERVICE_STOP_PENDING never allow for a new control to be sent
+		case ServiceStatus::Stopped : return ERROR_SERVICE_NOT_ACTIVE;
+		case ServiceStatus::StopPending: return ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
+
+		// SERVICE_START_PENDING only allows SERVICE_CONTROL_STOP
+		case ServiceStatus::StartPending : 
+			if(control != ServiceControl::Stop) return ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
+			// fall-through
+
+		// Check the requested control against the service's current accepted controls mask
+		default: if(!ServiceControlAccepted(control, m_status.dwControlsAccepted)) return ERROR_INVALID_SERVICE_CONTROL;
+	}
+
+	// Unlock the status critical section and invoke the service's handler directly
+	critsec.unlock();
+	return m_handler(static_cast<DWORD>(control), eventtype, eventdata, m_context);
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::ServiceControlAccepted (private, static)
+//
+// Checks a ServiceControl against a SERVICE_ACCEPT_XXXX mask
+//
+// Arguments:
+//
+//	control			- Service control code to be checked
+//	mask			- SERVICE_ACCEPT_XXXX mask to check control against
+
+bool service_harness::ServiceControlAccepted(ServiceControl control, DWORD mask)
+{
+	switch(control) {
+		
+		case ServiceControl::Stop:					return ((mask & SERVICE_ACCEPT_STOP) == SERVICE_ACCEPT_STOP);
+		case ServiceControl::Pause:					return ((mask & SERVICE_ACCEPT_PAUSE_CONTINUE) == SERVICE_ACCEPT_PAUSE_CONTINUE);
+		case ServiceControl::Continue:				return ((mask & SERVICE_ACCEPT_PAUSE_CONTINUE) == SERVICE_ACCEPT_PAUSE_CONTINUE);
+		case ServiceControl::Interrogate:			return true;
+		case ServiceControl::Shutdown:				return ((mask & SERVICE_ACCEPT_SHUTDOWN) == SERVICE_ACCEPT_SHUTDOWN);
+		case ServiceControl::ParameterChange:		return ((mask & SERVICE_ACCEPT_PARAMCHANGE) == SERVICE_ACCEPT_PARAMCHANGE);
+		case ServiceControl::NetBindAdd:			return ((mask & SERVICE_ACCEPT_NETBINDCHANGE) == SERVICE_ACCEPT_NETBINDCHANGE);
+		case ServiceControl::NetBindRemove:			return ((mask & SERVICE_ACCEPT_NETBINDCHANGE) == SERVICE_ACCEPT_NETBINDCHANGE);
+		case ServiceControl::NetBindEnable:			return ((mask & SERVICE_ACCEPT_NETBINDCHANGE) == SERVICE_ACCEPT_NETBINDCHANGE);
+		case ServiceControl::NetBindDisable:		return ((mask & SERVICE_ACCEPT_NETBINDCHANGE) == SERVICE_ACCEPT_NETBINDCHANGE);
+		case ServiceControl::DeviceEvent:			return false;
+		case ServiceControl::HardwareProfileChange:	return ((mask & SERVICE_ACCEPT_HARDWAREPROFILECHANGE) == SERVICE_ACCEPT_HARDWAREPROFILECHANGE);
+		case ServiceControl::PowerEvent:			return ((mask & SERVICE_ACCEPT_POWEREVENT) == SERVICE_ACCEPT_POWEREVENT);
+		case ServiceControl::SessionChange:			return ((mask & SERVICE_ACCEPT_SESSIONCHANGE) == SERVICE_ACCEPT_SESSIONCHANGE);
+		case ServiceControl::PreShutdown:			return ((mask & SERVICE_ACCEPT_PRESHUTDOWN) == SERVICE_ACCEPT_PRESHUTDOWN);
+		case ServiceControl::TimeChange:			return ((mask & SERVICE_ACCEPT_TIMECHANGE) == SERVICE_ACCEPT_TIMECHANGE);
+		case ServiceControl::TriggerEvent:			return ((mask & SERVICE_ACCEPT_TRIGGEREVENT) == SERVICE_ACCEPT_TRIGGEREVENT);
+		case ServiceControl::UserModeReboot:		return ((mask & SERVICE_ACCEPT_USERMODEREBOOT) == SERVICE_ACCEPT_USERMODEREBOOT);
+
+		default: return false;
+	}
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::Start (private)
+//
+// Starts the service
+//
+// Arguments:
+//
+//	argvector		- vector<> of command line argument strings
+
+void service_harness::Start(std::vector<tstring>& argvector)
+{
+	// If the main thread has already been created, the service has already been started
+	if(m_mainthread.joinable()) throw winexception(ERROR_SERVICE_ALREADY_RUNNING);
+
+	// Always reset the SERVICE_STATUS back to defaults before starting the service
+	memset(&m_status, 0, sizeof(SERVICE_STATUS));
+	m_status.dwCurrentState = static_cast<DWORD>(ServiceStatus::Stopped);
+
+	// There is an expectation that argv[0] is set to the service name
+	if((argvector.size() == 0) || (argvector[0].length() == 0)) throw winexception(E_INVALIDARG);
+
+	// Define the control handler registration callback for this harness instance
+	register_handler_func registerfunc = ([=](LPCTSTR servicename, LPHANDLER_FUNCTION_EX handler, LPVOID context) -> SERVICE_STATUS_HANDLE 
+	{
+		_ASSERTE(handler != nullptr);
+		UNREFERENCED_PARAMETER(servicename);
+
+		m_handler = handler;					// Store the handler function pointer
+		m_context = context;					// Store the handler context pointer
+
+		// Return the address of this harness instance as a pseudo SERVICE_STATUS_HANDLE for the service
+		return reinterpret_cast<SERVICE_STATUS_HANDLE>(this);
+	});
+
+	// Define the status change callback for this harness instance
+	set_status_func statusfunc = ([=](SERVICE_STATUS_HANDLE handle, LPSERVICE_STATUS status) -> BOOL { 
+
+		std::unique_lock<std::mutex> critsec(m_statuslock);
+
+		// Ensure that the handle provided is actually the address of this harness instance
+		_ASSERTE(reinterpret_cast<service_harness*>(handle) == this);
+		if(reinterpret_cast<service_harness*>(handle) != this) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
+
+		m_status = *status;						// Copy the new SERVICE_STATUS
+		critsec.unlock();						// Release the critical section
+		m_statuschanged.notify_all();			// Notify the status has been changed
+
+		return TRUE;
+	});
+
+	// Create the main service thread and launch it
+	m_mainthread = std::move(std::thread([=]() {
+
+		// Create a copy of the arguments vector local to this thread so it won't be destroyed
+		// prematurely, and convert it into an argv-style array of generic text string pointers
+		std::vector<tstring> arguments(argvector);
+		std::vector<tchar_t*> argv;
+		for(const auto& arg: arguments) argv.push_back(const_cast<tchar_t*>(arg.c_str()));
+		argv.push_back(nullptr);
+
+		// Create the context for the service using the lambdas defined above and invoke LocalMain()
+		service_context context = { ServiceProcessType::Unique, registerfunc, statusfunc };
+		LaunchService(argv.size() - 1, argv.data(), context);
+	}));
+
+	// Wait up to 30 seconds for the service to set SERVICE_START_PENDING
+	if(!WaitForStatus(ServiceStatus::StartPending, 30000)) throw winexception(ERROR_SERVICE_REQUEST_TIMEOUT);
+
+	// Wait indefinitely for the service to set SERVICE_RUNNING
+	WaitForStatus(ServiceStatus::Running);
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::Stop
+//
+// Sends SERVICE_CONTROL_STOP to the service, throws an exception if the
+// service does not accept the control or stops prematurely
+//
+// Arguments:
+//
+//	NONE
+
+void service_harness::Stop(void)
+{
+	DWORD result = SendControl(ServiceControl::Stop);
+	if(result != ERROR_SUCCESS) throw winexception(result);
+
+	WaitForStatus(ServiceStatus::Stopped);
+}
+
+//-----------------------------------------------------------------------------
+// service_harness::WaitForStatus
+//
+// Waits for the service to reach the specified status
+//
+// Arguments:
+//
+//	status		- Service status to wait for
+//	timeout		- Amount of time, in milliseconds, to wait before failing
+
+bool service_harness::WaitForStatus(ServiceStatus status, uint32_t timeout)
+{
+	std::unique_lock<std::mutex> critsec(m_statuslock);
+
+	// Wait for the condition variable to be trigged with the service status caller is looking for, or if
+	// the service has stopped unexpectedly due to an unhandled exception caught in ServiceMain()
+	bool result = m_statuschanged.wait_until(critsec, std::chrono::system_clock::now() + std::chrono::milliseconds(timeout), [=]() 
+	{ 
+		return (static_cast<ServiceStatus>(m_status.dwCurrentState) == status) || 
+			((static_cast<ServiceStatus>(m_status.dwCurrentState) == ServiceStatus::Stopped) && (m_status.dwWin32ExitCode != ERROR_SUCCESS)); 
+	});
+
+	// If the service has stopped (regardless of the reason), wait for the main thread to terminate
+	if(static_cast<ServiceStatus>(m_status.dwCurrentState) == ServiceStatus::Stopped) m_mainthread.join();
+
+	// If an error was generated by the service, throw that as an exception to the caller
+	if(m_status.dwWin32ExitCode != ERROR_SUCCESS) throw winexception(m_status.dwWin32ExitCode);
+
+	return result;
 }
 
 //-----------------------------------------------------------------------------
