@@ -20,8 +20,8 @@
 // SOFTWARE.
 //-----------------------------------------------------------------------------
 
-#ifndef __SERVICELIB_H_
-#define __SERVICELIB_H_
+#ifndef __SERVICE_H_
+#define __SERVICE_H_
 #pragma once
 
 // C Runtime Library
@@ -102,6 +102,18 @@ enum class ServiceErrorControl
 	Normal						= SERVICE_ERROR_NORMAL,
 	Severe						= SERVICE_ERROR_SEVERE,
 	Critical					= SERVICE_ERROR_CRITICAL,
+};
+
+// ::ServiceParameterFormat
+//
+// Strongly typed enumeraton of RRF_XXXXX registry value format constants
+enum class ServiceParameterFormat : uint32_t
+{
+	Binary						= RRF_RT_REG_BINARY						| RRF_ZEROONFAILURE,
+	DWord						= RRF_RT_DWORD							| RRF_ZEROONFAILURE,
+	MultiString					= RRF_RT_REG_MULTI_SZ					| RRF_ZEROONFAILURE,
+	QWord						= RRF_RT_QWORD							| RRF_ZEROONFAILURE,
+	String						= RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ	| RRF_ZEROONFAILURE,
 };
 
 // ::ServiceProcessType (Bitmask)
@@ -207,20 +219,35 @@ namespace svctl {
 	}
 #endif
 
+	// svctl::close_paramstore_func
+	//
+	// Function used to close a parameter storage handle
+	typedef std::function<void(void* handle)> close_paramstore_func;
+
+	// svctl::load_parameter_func
+	//
+	// Function used to load a parameter from storage
+	typedef std::function<size_t(void* handle, const tchar_t* name, ServiceParameterFormat format, void* buffer, size_t length)> load_parameter_func;
+
+	// svctl::open_paramstore_func
+	//
+	// Function used to open a parameter storage handle
+	typedef std::function<void*(const tchar_t* servicename)> open_paramstore_func;
+
 	// svctl::register_handler_func
 	//
 	// Function used to register a service's control handler callback function
-	typedef std::function<SERVICE_STATUS_HANDLE(LPCTSTR, LPHANDLER_FUNCTION_EX, LPVOID)> register_handler_func;
+	typedef std::function<SERVICE_STATUS_HANDLE(LPCTSTR servicename, LPHANDLER_FUNCTION_EX handler, LPVOID context)> register_handler_func;
 
 	// svctl::report_status_func
 	//
 	// Function used to report a service status to the service control manager
-	typedef std::function<void(SERVICE_STATUS&)> report_status_func;
+	typedef std::function<void(SERVICE_STATUS& status)> report_status_func;
 
 	// svctl::set_status_func
 	//
 	// Function used to set a service status using the handle returned by the register_handler_func
-	typedef std::function<BOOL(SERVICE_STATUS_HANDLE, LPSERVICE_STATUS)> set_status_func;
+	typedef std::function<BOOL(SERVICE_STATUS_HANDLE handle, LPSERVICE_STATUS status)> set_status_func;
 
 	// svctl::signal_type
 	//
@@ -358,6 +385,12 @@ namespace svctl {
 		HANDLE m_handle;
 	};
 
+	// svctl::zero_init
+	//
+	// Handy little wrapper around memset to zero-initialize a structure
+	template <typename _type>
+	_type& zero_init(_type& value) { memset(&value, 0, sizeof(_type)); return value; }
+
 	//
 	// Service Classes
 	//
@@ -456,7 +489,7 @@ namespace svctl {
 
 	// svctl::parameter_base
 	//
-	// Base class for template-specific service ss
+	// Base class for template-specific service parameters
 	class parameter_base
 	{
 	public:
@@ -466,12 +499,12 @@ namespace svctl {
 
 		// Bind
 		//
-		// Binds the parameter to the parent key and value name
-		void Bind(HKEY key, const tchar_t* name);
+		// Binds the parameter to the storage handle and value name
+		void Bind(void* handle, const tchar_t* name, const load_parameter_func& loadfunc);
 
 		// Load
 		//
-		// Loads the parameter value from the registry
+		// Loads the parameter value from storage
 		virtual void Load(void) = 0;
 
 		// Unbind
@@ -486,22 +519,20 @@ namespace svctl {
 
 		// IsBound
 		//
-		// Determines if the parameter has been bound to the registry
+		// Determines if the parameter has been bound to storage
 		bool IsBound(void);
 
 		// ReadValue<trivial>
 		//
 		// Generic version of ReadValue for trivial data types
-		template <typename _type> _type ReadValue(DWORD format)
+		template <typename _type> _type ReadValue(ServiceParameterFormat format)
 		{
 			static_assert(std::is_trivial<_type>::value, "data type is not trivial; ReadValue<> must be specialized");
 
-			_type		value;							// Value to be read from registry
-			DWORD		length = sizeof(_type);			// Length of the value buffer
+			_type		value;						// Value to be read from storage
 
-			// Attempt to read the binary value from the registry, set data to zeros on failure
-			LONG result = RegGetValue(m_key, nullptr, m_name.c_str(), format | RRF_ZEROONFAILURE, nullptr, &value, &length);
-			if(result != ERROR_SUCCESS) throw winexception(result);
+			// Attempt to read the binary value from the storage, set data to zeros on failure
+			m_loadfunc(m_handle, m_name.c_str(), format, &value, sizeof(_type));
 
 			return value;
 		}
@@ -509,38 +540,39 @@ namespace svctl {
 		// ReadValue<tstring>
 		//
 		// Specialization of ReadValue<> for REG_SZ / REG_EXPAND_SZ
-		template <> tstring ReadValue<tstring>(DWORD format)
+		template <> tstring ReadValue<tstring>(ServiceParameterFormat format)
 		{
-			DWORD length = 0;
-
 			// Get the length of the buffer required to hold the string
-			LONG result = RegGetValue(m_key, nullptr, m_name.c_str(), format, nullptr, nullptr, &length);
-			if(result != ERROR_SUCCESS) throw winexception(result);
+			size_t length = m_loadfunc(m_handle, m_name.c_str(), format, nullptr, 0);
 
-			// Allocate a local std::vector<> as the backing storage and read the value from the registry
+			// Special case: if the length of the string is zero, return an empty string
+			if(length == 0) return tstring();
+
+			// Allocate a local std::vector<> as the backing storage and read the value
 			std::vector<uint8_t> buffer(length);
-			result = RegGetValue(m_key, nullptr, m_name.c_str(), format | RRF_ZEROONFAILURE, nullptr, buffer.data(), &length);
-			if(result != ERROR_SUCCESS) throw winexception(result);
+			m_loadfunc(m_handle, m_name.c_str(), format, buffer.data(), length);
 
-			// Convert the registry value into a tstring instance
+			// Convert the value into a tstring instance
 			return tstring(reinterpret_cast<tchar_t*>(buffer.data()));
 		}
 
 		// ReadValue<std::vector<tstring>>
 		//
 		// Specialization of ReadValue<> for REG_MULTI_SZ
-		template <> std::vector<tstring> ReadValue<std::vector<tstring>>(DWORD format)
+		//
+		// TODO: use something more generic than vector<> as the return value, like a custom
+		// iterator-based class containing tstrings
+		template <> std::vector<tstring> ReadValue<std::vector<tstring>>(ServiceParameterFormat format)
 		{
-			DWORD length = 0;
-
 			// Get the length of the buffer required to hold the string array
-			LONG result = RegGetValue(m_key, nullptr, m_name.c_str(), format, nullptr, nullptr, &length);
-			if(result != ERROR_SUCCESS) throw winexception(result);
+			size_t length = m_loadfunc(m_handle, m_name.c_str(), format, nullptr, 0);
+			
+			// Special case: if length is zero, return an empty string vector
+			if(length == 0) return std::vector<tstring>();
 
-			// Allocate a local std::vector<> as the backing storage and read the value from the registry
+			// Allocate a local std::vector<> as the backing storage and read the value
 			std::vector<uint8_t> buffer(length);
-			result = RegGetValue(m_key, nullptr, m_name.c_str(), format | RRF_ZEROONFAILURE, nullptr, buffer.data(), &length);
-			if(result != ERROR_SUCCESS) throw winexception(result);
+			m_loadfunc(m_handle, m_name.c_str(), format, buffer.data(), length);
 
 			// Create a collection of tstring objects, one for each string in the returned array
 			std::vector<tstring> value;
@@ -554,10 +586,15 @@ namespace svctl {
 			return value;
 		}
 
-		// m_key
+		// m_handle
 		//
-		// Bound registry parent key handle
-		HKEY m_key = nullptr;
+		// Bound parameter storage handle
+		void* m_handle = nullptr;
+
+		// m_loadfunc
+		//
+		// Function used to load a parameter from storage
+		load_parameter_func m_loadfunc;
 
 		// m_lock
 		//
@@ -566,7 +603,7 @@ namespace svctl {
 
 		// m_name
 		//
-		// Bound registry value name
+		// Bound parameter value name
 		tstring m_name;
 
 	private:
@@ -580,11 +617,11 @@ namespace svctl {
 	// Service parameter template class
 	//
 	//	_type		- Value type
-	//	_format		- Format flags to pass into RegGetValue
+	//	_format		- Format flags to pass into load_parameter_func
 	//	_inittype	- Type used with an initializer list
 	//	_zeroinit	- Flag that the type can be zero-initialized by default
 
-	template<typename _type, DWORD _format, typename _inittype = _type, bool _zeroinit = std::is_trivial<_type>::value>
+	template<typename _type, ServiceParameterFormat _format, typename _inittype = _type, bool _zeroinit = std::is_trivial<_type>::value>
 	class parameter : public parameter_base
 	{
 	public:
@@ -594,7 +631,7 @@ namespace svctl {
 		static_assert(!std::is_reference<_type>::value, "Service parameters cannot be reference types");
 
 		// Constructors
-		parameter() { if(_zeroinit) memset(&m_value, 0, sizeof(_type)); }
+		parameter() { if(_zeroinit) zero_init(m_value); }
 		explicit parameter(_inittype defvalue) : m_value({defvalue}) {}
 		
 		// TODO: This does not work in Visual C++ 2013, appears to be a bug in the compiler that 
@@ -614,7 +651,7 @@ namespace svctl {
 
 		// IsDefaulted
 		//
-		// Flag if the value has been defaulted or if it has been read from the registry
+		// Flag if the value has been defaulted or if it has been read from storage
 		__declspec(property(get=getIsDefaulted)) bool IsDefaulted;
 		bool getIsDefaulted(void) const { std::lock_guard<std::recursive_mutex> critsec(m_lock); return m_defaulted; }
 
@@ -633,12 +670,12 @@ namespace svctl {
 
 			try { 
 			
-				// Attempt to read the value from the registry, and if successful clear defaulted flag
+				// Attempt to read the value from storage, and if successful clear defaulted flag
 				m_value = parameter_base::ReadValue<_type>(_format);
 				m_defaulted = false;
 			}
 			
-			catch(...) { /* DO NOTHING ON REGISTRY EXCEPTION */ }
+			catch(...) { /* DO NOTHING ON STORAGE EXCEPTION */ }
 		}
 
 		// m_defaulted
@@ -672,6 +709,21 @@ namespace svctl {
 		//
 		// Function used by the service to set status
 		set_status_func SetStatusFunc;
+
+		// OpenParameterStore
+		//
+		// Defines the function used to open parameter storage
+		open_paramstore_func OpenParameterStore;
+
+		// LoadParameter
+		//
+		// Defines the function used to load a parameter from storage
+		load_parameter_func LoadParameter;
+
+		// CloseParameterStore
+		//
+		// Defines the function used to close parameter storage
+		close_paramstore_func CloseParameterStore;
 	};
 
 	// svctl::service
@@ -689,6 +741,11 @@ namespace svctl {
 		// Instance Constructor
 		service()=default;
 
+		// CloseParameterStore
+		//
+		// Closes the parameter store; uses registry if not overriden in derived class
+		virtual void CloseParameterStore(void* handle);
+
 		// Continue
 		//
 		// Continues the service from a paused state
@@ -698,6 +755,11 @@ namespace svctl {
 		//
 		// Iterates over the collection of parameters and executes a function against each
 		virtual void IterateParameters(std::function<void(const tstring& name, parameter_base& param)> func);
+
+		// LoadParameter
+		//
+		// Loads a named value from the parameter store; uses registry if not overriden in derived class
+		virtual size_t LoadParameter(void* handle, const tchar_t* name, ServiceParameterFormat format, void* buffer, size_t length);
 
 		// LocalMain
 		//
@@ -717,6 +779,11 @@ namespace svctl {
 		// Invoked when the service is started; must be implemented in the service
 		virtual void OnStart(int argc, LPTSTR* argv) = 0;
 
+		// OpenParameterStore
+		//
+		// Opens the parameter store; uses registry if not overriden in derived class
+		virtual void* OpenParameterStore(const tchar_t* servicename);
+
 		// Pause
 		//
 		// Pauses the service
@@ -735,9 +802,9 @@ namespace svctl {
 		{
 			_ASSERTE(argc);					// Service name = argv[0]
 
-			// When running as a regular service, the process type is read from the registry and the
-			// standard Win32 service API functions are used for registration and status reporting
-			service_context context = { GetServiceProcessType(argv[0]), ::RegisterServiceCtrlHandlerEx, ::SetServiceStatus };
+			// When running as a regular service, the process type is read from the registry, the standard Win32
+			// service API functions are used for registration and status reporting, and parameters are dynamic
+			service_context context = { GetServiceProcessType(argv[0]), ::RegisterServiceCtrlHandlerEx, ::SetServiceStatus, nullptr, nullptr, nullptr };
 
 			// Create an instance of the derived service class and invoke ServiceMain()
 			std::unique_ptr<service> instance = std::make_unique<_derived>();
@@ -846,178 +913,6 @@ namespace svctl {
 		signal<signal_type::ManualReset> m_stopsignal;
 	};
 
-	// svctl::service_harness
-	//
-	// Test harness to execute a service as an application
-	class service_harness
-	{
-	public:
-	
-		// Constructor / Destructor
-		service_harness();
-		virtual ~service_harness();
-
-		// Continue
-		//
-		// Sends ServiceControl::Continue and waits for ServiceStatus::Running
-		void Continue(void);
-
-		// Pause
-		//
-		// Sends ServiceControl::Pause and waits for ServiceStatus::Paused
-		void Pause(void);
-
-		// SendControl
-		//
-		// Sends a control code to the service
-		DWORD SendControl(ServiceControl control) { return SendControl(control, 0, nullptr); }
-		DWORD SendControl(ServiceControl control, DWORD eventtype, void* eventdata);
-		
-		// Start (string)
-		//
-		// Starts the service, optionally specifying a variadic set of command line arguments.
-		// (Arguments can be C-style strings, fundamental data types, or tstring references)
-		template <typename... _arguments>
-		void Start(LPCTSTR servicename, const _arguments&... arguments)
-		{
-			// Construct a vector<> for the arguments starting with the service name
-			// and recursively invoke one of the variadic overloads until done
-			std::vector<tstring> argvector { servicename };
-			Start(argvector, arguments...);
-		}
-
-		// Start (resource id)
-		//
-		// Starts the service, optionally specifying a variadic set of command line arguments.
-		// (Arguments can be C-style strings, fundamental data types, or tstring references)
-		template <typename... _arguments>
-		void Start(unsigned int servicename, const _arguments&... arguments)
-		{
-			// Construct a vector<> for the arguments starting with the service name
-			// and recursively invoke one of the variadic overloads until done
-			std::vector<tstring> argvector { resstring(servicename) };
-			Start(argvector, arguments...);
-		}
-
-		// Stop
-		//
-		// Stops the service; should be called rather than SendControl()
-		// as this also waits for the main thread and resets the status
-		void Stop(void);
-
-		// WaitForStatus
-		//
-		// Waits for the service to reach the specified status
-		bool WaitForStatus(ServiceStatus status, uint32_t timeout = INFINITE);
-
-		// CanContinue
-		//
-		// Determines if the service can be continued
-		__declspec(property(get=getCanContinue)) bool CanContinue;
-		bool getCanContinue(void);
-
-		// CanPause
-		//
-		// Determines if the service can be paused
-		__declspec(property(get=getCanPause)) bool CanPause;
-		bool getCanPause(void);
-
-		// CanStop
-		//
-		// Determines if the service can be stopped
-		__declspec(property(get=getCanStop)) bool CanStop;
-		bool getCanStop(void);
-
-		// Status
-		//
-		// Gets a copy of the current service status
-		__declspec(property(get=getStatus)) SERVICE_STATUS Status;
-		SERVICE_STATUS getStatus(void) { std::lock_guard<std::mutex> critsec(m_statuslock); return m_status; }
-
-	protected:
-
-		// LaunchService
-		//
-		// Invokes the derived service class' LocalMain() entry point
-		virtual void LaunchService(int argc, LPTSTR* argv, const service_context& context) = 0;
-
-	private:
-
-		service_harness(const service_harness&)=delete;
-		service_harness& operator=(const service_harness&)=delete;
-
-		// ServiceControlAccepted (static)
-		//
-		// Checks a ServiceControl against a SERVICE_ACCEPTS_XXXX mask
-		static bool ServiceControlAccepted(ServiceControl control, DWORD mask);
-
-		// Start (variadic)
-		//
-		// Recursive variadic function, converts for a fundamental type argument
-		template <typename _next, typename... _remaining>
-		typename std::enable_if<std::is_fundamental<_next>::value, void>::type
-		Start(std::vector<tstring>& argvector, const _next& next, const _remaining&... remaining)
-		{
-			argvector.push_back(to_tstring(next));
-			Start(argvector, remaining...);
-		}
-
-		// Start (variadic)
-		//
-		// Recursive variadic function, processes an tstring type argument
-		template <typename... _remaining>
-		void Start(std::vector<tstring>& argvector, const tstring& next, const _remaining&... remaining)
-		{
-			argvector.push_back(next);
-			Start(argvector, remaining...);
-		}
-	
-		// Start (variadic)
-		//
-		// Recursive variadic function, processes a generic text C-style string pointer
-		template <typename... _remaining>
-		void Start(std::vector<tstring>& argvector, const tchar_t* next, const _remaining&... remaining)
-		{
-			argvector.push_back(next);
-			Start(argvector, remaining...);
-		}
-	
-		// Start
-		//
-		// Final overload in the variadic chain for Start()
-		void Start(std::vector<tstring>& argvector);
-
-		// m_context
-		//
-		// Context pointer registered for the service control handler
-		void* m_context = nullptr;
-
-		// m_handler
-		//
-		// Service control handler callback function pointer
-		LPHANDLER_FUNCTION_EX m_handler = nullptr;
-
-		// m_mainthread
-		//
-		// Main service thread
-		std::thread m_mainthread;
-
-		// m_status
-		//
-		// Current service status
-		SERVICE_STATUS m_status;
-
-		// m_statuschanged
-		//
-		// Condition variable set when service status has changed
-		std::condition_variable m_statuschanged;
-
-		// m_statuslock
-		//
-		// Critical section to serialize access to the SERVICE_STATUS
-		std::mutex m_statuslock;
-	};
-
 } // namespace svctl
 
 //-----------------------------------------------------------------------------
@@ -1032,6 +927,12 @@ namespace svctl {
 // Global namespace alias for svctl::winexception
 
 using ServiceException = svctl::winexception;
+
+//-----------------------------------------------------------------------------
+// ::ServiceHarness
+//
+// Forward declaration of external class
+template<class _service> class ServiceHarness;
 
 //-----------------------------------------------------------------------------
 // ::ServiceControlHandler<>
@@ -1173,34 +1074,6 @@ private:
 };
 
 //-----------------------------------------------------------------------------
-// ::ServiceHarness<>
-//
-// Template version of svctl::service_harness
-
-template <class _service>
-class ServiceHarness : public svctl::service_harness
-{
-public:
-
-	// Constructor / Destructor
-	ServiceHarness()=default;
-	virtual ~ServiceHarness()=default;
-
-private:
-
-	ServiceHarness(const ServiceHarness&)=delete;
-	ServiceHarness& operator=(const ServiceHarness&)=delete;
-
-	// LaunchService (service_harness)
-	//
-	// Launches the derived service by invoking it's LocalMain entry point
-	virtual void LaunchService(int argc, LPTSTR* argv, const svctl::service_context& context)
-	{
-		_service::LocalMain<_service>(argc, argv, context);
-	}
-};
-
-//-----------------------------------------------------------------------------
 // ::Service<>
 //
 // Template version of svctl::service
@@ -1222,27 +1095,27 @@ protected:
 	//
 	// Generic REG_BINARY parameter for any trivial data type
 	template <class _type>
-	using BinaryParameter = svctl::parameter<_type, RRF_RT_REG_BINARY>;
+	using BinaryParameter = svctl::parameter<_type, ServiceParameterFormat::Binary>;
 
 	// DWordParameter
 	//
 	// 32-bit unsigned integer parameter
-	using DWordParameter = svctl::parameter<uint32_t, RRF_RT_DWORD>;
+	using DWordParameter = svctl::parameter<uint32_t, ServiceParameterFormat::DWord>;
 
 	// MultiStringParameter
 	//
 	// Vector of std:basic_string<tchar_t> parameters
-	using MultiStringParameter = svctl::parameter<std::vector<svctl::tstring>, RRF_RT_REG_MULTI_SZ, svctl::tstring>;
+	using MultiStringParameter = svctl::parameter<std::vector<svctl::tstring>, ServiceParameterFormat::MultiString, svctl::tstring>;
 
 	// QWordParameter
 	//
 	// 64-bit unsigned integer parameter
-	using QWordParameter = svctl::parameter<uint64_t, RRF_RT_QWORD>;
+	using QWordParameter = svctl::parameter<uint64_t, ServiceParameterFormat::QWord>;
 
 	// StringParameter
 	//
 	// std::basic_string<tchar_t> parameter
-	using StringParameter = svctl::parameter<svctl::tstring, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ>;
+	using StringParameter = svctl::parameter<svctl::tstring, ServiceParameterFormat::String>;
 	
 private:
 
@@ -1300,8 +1173,8 @@ private:
 // PARAMETER_MAP
 //
 // Used to declare the IterateParameters virtual function implementation for the service.
-// The map entry defines what the name of the parameter registry value will be and indicates
-// what svctl::parameter<> member variable is to be bound to that registry value.
+// The map entry defines what the name of the parameter storage value will be and indicates
+// what svctl::parameter<> member variable is to be bound to that storage value.
 //
 // Local module resource identifiers can also be used in lieu of hard-coding the value name
 //
@@ -1329,4 +1202,4 @@ private:
 
 #pragma warning(pop)
 
-#endif	// __SERVICELIB_H_
+#endif	// __SERVICE_H_

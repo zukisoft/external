@@ -44,12 +44,13 @@ SOFTWARE.
 
 >> HOW TO DEBUG SERVICES
 
----------------------------
-SERVICE REGISTRY PARAMETERS
----------------------------
+------------------
+SERVICE PARAMETERS
+------------------
 
-Support for basic read-only registry-based service parameters is provided by the following
-data types that can be declared for service-local member variables:
+Support for read-only service parameters is provided by the following data types
+that can be declared as derived service class member variables.
+// todo: can be overridden, default is registry key
 
 DWordParameter (uint32_t)
 - Registry type: REG_BINARY or REG_DWORD
@@ -87,6 +88,7 @@ provided that the string table is part of the local executable's resources:
 		PARAMETER_ENTRY(_T("MyDWORDParameter"), m_mydword)
 	END_PARAMETER_MAP()
 
+// todo: now can be overridden
 At service startup, the PARAMETER_MAP is iterated and each parameter is bound to the 
 HLKM\System\CurrentControlSet\Services\{service name}\Parameters registry key.  If this
 parent key does not exist, it will be created automatically.  Each parameter will then
@@ -132,15 +134,14 @@ method will do nothing.  Detection of a successful load from the registry can be
 by checking the IsDefaulted property of the parameter variable.  This will be set to false once
 the value has been loaded from the registry at least once
 
---------------------
-SERVICE TEST HARNESS
---------------------
+// todo: can now be overriden in derived service to not use the registry
 
->>
->> LIMITATION: Parameters do not work unless process has access to the actual service registry key,
->> will deal with this at some point in the future by adding a way to specify a parameter loading
->> callback method or virtual function in ServiceHarness<>
->>
+-------------------------------
+SERVICE TEST HARNESS (EXTERNAL)
+-------------------------------
+
+Header File: ServiceHarness.h
+Implementation File: ServiceHarness.cpp
 
 Services generated with the service template library can also be run under the context of a provided
 test harness class, ServiceHarness<>.  This class provides the ability to start, stop and send control
@@ -159,8 +160,23 @@ for some trigger to occur that will terminate the harness application, and then 
 	...
 	ServiceHarness<MyService> harness;
 	harness.Start(_T("MyServiceName"));
-	/* WAIT FOR SOME TRIGGER HERE, PERHAPS CTRL+C IF A CONSOLE APPLICATION */
+
+	// wait for some trigger here to stop the service test harness
 	harness.Stop();
+	...
+
+
+>> PARAMETERS DOCUMENTATION GOES HERE
+	need note about EXPAND_SZ, will not automatically expand variables like with registry
+	
+	...
+	ServiceHarness<MyService> harness;
+	harness.SetParameter(_T("MyStringParameter"), _T("PathToAnInterestingFile"));
+	harness.SetParameter(_T("MyDWordParameter"), 0x12345678);
+	harness.Start(_T("MyServiceName"));
+
+	// parameters can be set at any time, service does not need to be stopped
+	harness.SetParameter(_T("StringArrayAfterStart"), { _T("String1"), _T("String2"), _T("String3") });
 	...
 
 
@@ -182,8 +198,26 @@ DWORD SendControl(ServiceControl control, DWORD eventtype, LPVOID eventdata)
 	- Sends a control code to the service, optionally specifying event information (this is not common)
 	- Returns a status code similar to Win32 API's ControlService() method, should not throw an exception
 
+void SetParameter(LPCTSTR name, <type>& value)
+	- Sets a local service parameter key/value pair with a format derived from <type>
+	- Throws ServiceException& on error
+
+		<type>                               Implied format                       Service<> declaration
+		------                               --------------                       ---------------------
+		8-bit integer                        ServiceParameterFormat::DWord        DWordParameter
+		16-bit integer                       ServiceParameterFormat::DWord        DWordParameter
+		32-bit integer                       ServiceParameterFormat::DWord        DWordParameter
+		64-bit integer                       ServiceParameterFormat::QWord        QWordParameter
+		const TCHAR*                         ServiceParameterFormat::String       StringParameter
+		const std::[w]string&                ServiceParameterFormat::String       StringParameter
+		std::initializer_list<const TCHAR*>  ServiceParameterFormat::MultiString  MultiStringParameter
+		// more MultiString overloads will come here
+		[any other trivial data type]        ServiceParameterFormat::Binary       BinaryParameter
+
 void Start(LPCTSTR servicename, ...)
+void Start(unsigned int servicename, ...)
 	- Starts the service with the specified service name and optional command line arguments
+	- unsigned int overload accepts a resource string id for the service name
 	- If service does not reach ServiceStatus::StartPending in 30 seconds, will raise an exception
 	- Waits for the service to reach ServiceStatus::Running
 	- Throws ServiceException& on error or if service stops prematurely
