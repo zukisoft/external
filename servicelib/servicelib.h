@@ -804,9 +804,7 @@ namespace svctl {
 			_ASSERTE(argc);					// Service name = argv[0]
 
 			// Create an instance of the derived service class and invoke ServiceMain() with specified context
-			// TODO: Changed this to support shared_from_this() on the service class, this should be an option somehow
-			//std::unique_ptr<service> instance = std::make_unique<_derived>();
-			std::shared_ptr<service> instance = std::make_shared<_derived>();
+			std::unique_ptr<service> instance = std::make_unique<_derived>();
 			instance->Main(static_cast<int>(argc), argv, context);
 		}
 
@@ -843,9 +841,7 @@ namespace svctl {
 			service_context context = { GetServiceProcessType(argv[0]), ::RegisterServiceCtrlHandlerEx, ::SetServiceStatus, nullptr, nullptr, nullptr };
 
 			// Create an instance of the derived service class and invoke ServiceMain()
-			// TODO: Changed this to support shared_from_this() on the service class, this should be an option somehow
-			//std::unique_ptr<service> instance = std::make_unique<_derived>();
-			std::shared_ptr<service> instance = std::make_shared<_derived>();
+			std::unique_ptr<service> instance = std::make_unique<_derived>();
 			instance->Main(static_cast<int>(argc), argv, context);
 		}
 
