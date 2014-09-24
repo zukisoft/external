@@ -795,18 +795,33 @@ namespace svctl {
 		// Loads a named value from the parameter store; uses registry if not overriden in derived class
 		virtual size_t LoadParameter(void* handle, const tchar_t* name, ServiceParameterFormat format, void* buffer, size_t length);
 
-		// LocalMain
+		// LocalMain (shared_ptr)
 		//
-		// Entry point when the service is executed as an application
+		// Entry point when the service is executed as an application.  Enabled if the service class derives
+		// from std::enable_shared_from_this<_derived>
 		template <class _derived>
-		static void LocalMain(DWORD argc, LPTSTR* argv, const service_context& context)
+		static typename std::enable_if<std::is_base_of<std::enable_shared_from_this<_derived>, _derived>::value, void>::type
+		LocalMain(DWORD argc, LPTSTR* argv, const service_context& context)
 		{
 			_ASSERTE(argc);					// Service name = argv[0]
 
 			// Create an instance of the derived service class and invoke ServiceMain() with specified context
-			// TODO: Changed this to support shared_from_this() on the service class, this should be an option somehow
-			//std::unique_ptr<service> instance = std::make_unique<_derived>();
 			std::shared_ptr<service> instance = std::make_shared<_derived>();
+			instance->Main(static_cast<int>(argc), argv, context);
+		}
+
+		// LocalMain (unique_ptr)
+		//
+		// Entry point when the service is executed as an application.  Enabled if the service class does not
+		// derive from std::enable_shared_from_this<_derived>
+		template <class _derived>
+		static typename std::enable_if<!std::is_base_of<std::enable_shared_from_this<_derived>, _derived>::value, void>::type
+		LocalMain(DWORD argc, LPTSTR* argv, const service_context& context)
+		{
+			_ASSERTE(argc);					// Service name = argv[0]
+
+			// Create an instance of the derived service class and invoke ServiceMain() with specified context
+			std::unique_ptr<service> instance = std::make_unique<_derived>();
 			instance->Main(static_cast<int>(argc), argv, context);
 		}
 
@@ -830,11 +845,13 @@ namespace svctl {
 		// Reloads all of the bound service parameter values
 		void ReloadParameters(void);
 
-		// ServiceMain
+		// ServiceMain (shared_ptr)
 		//
-		// Service entry point, specific for the derived class object
+		// Service entry point, specific for the derived class object.  Enabled if the service class derives
+		// from std::enable_shared_from_this<_derived>
 		template <class _derived>
-		static void WINAPI ServiceMain(DWORD argc, LPTSTR* argv)
+		static typename std::enable_if<std::is_base_of<std::enable_shared_from_this<_derived>, _derived>::value, void>::type WINAPI
+		ServiceMain(DWORD argc, LPTSTR* argv)
 		{
 			_ASSERTE(argc);					// Service name = argv[0]
 
@@ -843,9 +860,26 @@ namespace svctl {
 			service_context context = { GetServiceProcessType(argv[0]), ::RegisterServiceCtrlHandlerEx, ::SetServiceStatus, nullptr, nullptr, nullptr };
 
 			// Create an instance of the derived service class and invoke ServiceMain()
-			// TODO: Changed this to support shared_from_this() on the service class, this should be an option somehow
-			//std::unique_ptr<service> instance = std::make_unique<_derived>();
 			std::shared_ptr<service> instance = std::make_shared<_derived>();
+			instance->Main(static_cast<int>(argc), argv, context);
+		}
+
+		// ServiceMain (unique_ptr)
+		//
+		// Service entry point, specific for the derived class object.  Enabled if the service class does not
+		// derive from std::enable_shared_from_this<_derived>
+		template <class _derived>
+		static typename std::enable_if<!std::is_base_of<std::enable_shared_from_this<_derived>, _derived>::value, void>::type WINAPI
+		ServiceMain(DWORD argc, LPTSTR* argv)
+		{
+			_ASSERTE(argc);					// Service name = argv[0]
+
+			// When running as a regular service, the process type is read from the registry, the standard Win32
+			// service API functions are used for registration and status reporting, and parameters are dynamic
+			service_context context = { GetServiceProcessType(argv[0]), ::RegisterServiceCtrlHandlerEx, ::SetServiceStatus, nullptr, nullptr, nullptr };
+
+			// Create an instance of the derived service class and invoke ServiceMain()
+			std::unique_ptr<service> instance = std::make_unique<_derived>();
 			instance->Main(static_cast<int>(argc), argv, context);
 		}
 
