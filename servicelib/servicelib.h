@@ -808,6 +808,10 @@ namespace svctl {
 			// Create an instance of the derived service class and invoke ServiceMain() with specified context
 			std::shared_ptr<service> instance = std::make_shared<_derived>();
 			instance->Main(static_cast<int>(argc), argv, context);
+
+			// If the service opted for shared_ptr, there isn't much that can be done to force the destructor
+			// to be called if it leaks references to itself; but this can be asserted in DEBUG builds ...
+			_ASSERTE(instance.use_count() == 1);
 		}
 
 		// LocalMain (unique_ptr)
@@ -862,6 +866,10 @@ namespace svctl {
 			// Create an instance of the derived service class and invoke ServiceMain()
 			std::shared_ptr<service> instance = std::make_shared<_derived>();
 			instance->Main(static_cast<int>(argc), argv, context);
+
+			// If the service opted for shared_ptr, there isn't much that can be done to force the destructor
+			// to be called if it leaks references to itself; but this can be asserted in DEBUG builds ...
+			_ASSERTE(instance.use_count() == 1);
 		}
 
 		// ServiceMain (unique_ptr)
