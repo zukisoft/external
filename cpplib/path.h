@@ -533,12 +533,14 @@ template<> struct path_operations<path_format::windows>
 	}
 };
 
-// path_hash
+template<typename _char_t> struct path_hash;
+
+// path_hash<char>
 //
-template<typename _char_t>
-struct path_hash
+template<>
+struct path_hash<char>
 {
-	size_t operator()(const _char_t* key) const
+	size_t operator()(const char* key) const
 	{
 		// http://www.isthe.com/chongo/tech/comp/fnv/index.html#FNV-source
 
@@ -553,7 +555,41 @@ struct path_hash
 #endif
 
 		// Calcuate the FNV-1a hash for this wide character string by processing
-		// each byte of the wide string individually
+		// each byte of the string individually
+		size_t hash = fnv_offset_basis;
+
+		while(*key) {
+
+			hash ^= *reinterpret_cast<const uint8_t*>(key);
+			hash *= fnv_prime;
+			key++;
+		}
+
+		return hash;
+	}
+};
+
+// path_hash<wchar_t>
+//
+template<>
+struct path_hash<wchar_t>
+{
+	size_t operator()(const wchar_t* key) const
+	{
+		// http://www.isthe.com/chongo/tech/comp/fnv/index.html#FNV-source
+
+#ifndef _M_X64
+		// 32-bit FNV-1a hash
+		const size_t fnv_offset_basis{ 2166136261U };
+		const size_t fnv_prime{ 16777619U };
+#else
+		// 64-bit FNV-1a hash
+		const size_t fnv_offset_basis{ 14695981039346656037ULL };
+		const size_t fnv_prime{ 1099511628211ULL };
+#endif
+
+		// Calcuate the FNV-1a hash for this wide character string by processing
+		// each byte of the string individually
 		size_t hash = fnv_offset_basis;
 
 		while(*key) {
