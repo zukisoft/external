@@ -42,7 +42,7 @@
 // indicates what the allowable values are.  Bits not in the allowed mask will be silently
 // stripped out, no exception will be thrown.
 //
-// class MyBitmask : public bitmask<uint8_t>
+// class MyBitmask : public bitmask<MyBitmask, uint8_t>
 // {
 //     using bitmask::bitmask;
 //
@@ -52,10 +52,10 @@
 //     static const ValueTwo;
 // };
 //
-// const MyBitmask::ValueOne = MyBitmask { 0x01 };
-// const MyBitmask::ValueTwo = MyBitmask { 0x02 };
+// MyBitmask::ValueOne const = MyBitmask { 0x01 };
+// MyBitmask::ValueTwo const = MyBitmask { 0x02 };
 
-template<typename _basetype, _basetype _allowed = std::numeric_limits<_basetype>::max()>
+template<typename _derived, typename _basetype = decltype(uint32_t), _basetype _allowed = std::numeric_limits<_basetype>::max()>
 class bitmask
 {
 public:
@@ -66,7 +66,7 @@ public:
 
 	// Copy Constructor
 	//
-	bitmask(const bitmask& rhs) : m_value(rhs.m_value & _allowed) {}
+	bitmask(_derived const& rhs) : m_value(rhs.m_value & _allowed) {}
 
 	// Destructor
 	//
@@ -74,28 +74,28 @@ public:
 
 	// bitwise and operator
 	//
-	bitmask operator&(const bitmask& rhs) const
+	_derived operator&(const _derived& rhs) const
 	{
-		return bitmask((m_value & rhs.m_value) & _allowed);
+		return _derived((m_value & rhs.m_value) & _allowed);
 	}
 
 	// bitwise or operator
 	//
-	bitmask operator|(const bitmask& rhs) const
+	_derived operator|(_derived const& rhs) const
 	{
-		return bitmask((m_value | rhs.m_value) & _allowed);
+		return _derived((m_value | rhs.m_value) & _allowed);
 	}
 
 	// equality operator
 	//
-	bool operator==(const bitmask& rhs) const
+	bool operator==(_derived const& rhs) const
 	{
 		return m_value == rhs.m_value;
 	}
 
 	// inequality operator
 	//
-	bool operator!=(const bitmask& rhs) const
+	bool operator!=(_derived const& rhs) const
 	{
 		return m_value != rhs.m_value;
 	}
@@ -109,7 +109,8 @@ public:
 
 private:
 
-	bitmask& operator=(const bitmask&)=delete;
+	bitmask& operator=(bitmask const&)=delete;
+	_derived& operator=(_derived const&)=delete;
 
 	_basetype			m_value;			// Contained value
 };
