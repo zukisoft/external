@@ -165,15 +165,37 @@ public:
 	// Releases an exclusive writer lock
 	void unlock_write(void) { ReleaseSRWLockExclusive(&m_srwl); }
 
+	// reader_writer_lock::scoped_lock
+	//
+	class scoped_lock
+	{
+	protected:
+
+		// Instance Constructor
+		//
+		scoped_lock(reader_writer_lock& rwl) : m_rwl(rwl), m_held(true) {}
+
+		//---------------------------------------------------------------------
+		// Protected Member Variables
+
+		reader_writer_lock&			m_rwl;		// Referenced reader_writer_lock
+		bool						m_held;		// Flag if the reader is held
+
+	private:
+
+		scoped_lock(const scoped_lock&)=delete;
+		scoped_lock& operator=(const scoped_lock&)=delete;
+	};
+
 	// reader_writer_lock::scoped_lock_read
 	//
-	class scoped_lock_read
+	class scoped_lock_read : public scoped_lock
 	{
 	public:
 
 		// Instance Constructor
 		//
-		explicit scoped_lock_read(reader_writer_lock& rwl) : m_rwl(rwl), m_held(true) { m_rwl.lock_read(); }
+		explicit scoped_lock_read(reader_writer_lock& rwl) : scoped_lock(rwl) { m_rwl.lock_read(); }
 
 		// Destructor
 		//
@@ -191,23 +213,17 @@ public:
 
 		scoped_lock_read(const scoped_lock_read&)=delete;
 		scoped_lock_read& operator=(const scoped_lock_read&)=delete;
-
-		//---------------------------------------------------------------------
-		// Member Variables
-
-		reader_writer_lock&			m_rwl;		// Referenced reader_writer_lock
-		bool						m_held;		// Flag if the reader is held
 	};
 
 	// reader_writer_lock::scoped_lock_write
 	//
-	class scoped_lock_write
+	class scoped_lock_write : public scoped_lock
 	{
 	public:
 
 		// Instance Constructor
 		//
-		explicit scoped_lock_write(reader_writer_lock& rwl) : m_rwl(rwl), m_held(true) { m_rwl.lock_write(); }
+		explicit scoped_lock_write(reader_writer_lock& rwl) : scoped_lock(rwl) { m_rwl.lock_write(); }
 
 		// Destructor
 		//
@@ -225,12 +241,6 @@ public:
 
 		scoped_lock_write(const scoped_lock_write&)=delete;
 		scoped_lock_write& operator=(const scoped_lock_write&)=delete;
-
-		//---------------------------------------------------------------------
-		// Member Variables
-
-		reader_writer_lock&			m_rwl;		// Referenced reader_writer_lock
-		bool						m_held;		// Flag if the writer is held
 	};
 
 private:
