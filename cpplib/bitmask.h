@@ -86,6 +86,13 @@ public:
 		return _derived((m_value | rhs.m_value) & _allowed);
 	}
 
+	// bitwise not operator
+	//
+	_derived operator~(void) const
+	{
+		return _derived((~m_value) & _allowed);
+	}
+
 	// equality operator
 	//
 	bool operator==(_derived const& rhs) const
