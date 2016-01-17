@@ -22,14 +22,21 @@ BUILD (x86)
 ===========
 > Open Developer Command Prompt for Visual Studio
 > CD {somewhere}
-> MD llvm-3.7.1-build
-> CD llvm-3.7.1-build
-cmake -G "Visual Studio 14" ..\llvm-3.7.1.src\ -DLLVM_TARGETS_TO_BUILD=X86
-devenv LLVM.sln /Build "Release|Win32" /project libclang
-> Get libclang.lib from {somewhere}\llvm-3.7.1-build\Release\lib
-> Get libclang.dll from {somewhere}\llvm-3.7.1-build\Release\bin
+> MD llvm-3.7.1-x86
+> CD llvm-3.7.1-x86
+> cmake -G "Visual Studio 14" ..\llvm-3.7.1.src\ -DLLVM_TARGETS_TO_BUILD=X86
+> devenv LLVM.sln /Build "Release|Win32" /project libclang
+> Get libclang.lib from {somewhere}\llvm-3.7.1-x86\Release\lib
+> Get libclang.dll from {somewhere}\llvm-3.7.1-x86\Release\bin
 
 BUILD (x64)
 ===========
-TODO
+> Open Developer Command Prompt for Visual Studio
+> CD {somewhere}
+> MD llvm-3.7.1-x64
+> CD llvm-3.7.1-x64
+> cmake -G "Visual Studio 14 Win64" ..\llvm-3.7.1.src\ -DLLVM_TARGETS_TO_BUILD=X86
+> devenv LLVM.sln /Build "Release|x64" /project libclang
+> Get libclang.lib from {somewhere}\llvm-3.7.1-x64\Release\lib
+> Get libclang.dll from {somewhere}\llvm-3.7.1-x64\Release\bin
 
